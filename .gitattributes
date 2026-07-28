@@ -1,0 +1,27 @@
+# Ensure scripts and source files that run inside Linux containers always use LF line endings,
+# regardless of the OS/editor used to create or edit them (important since primary development
+# happens on Windows). A CRLF line ending on a shell script/entrypoint baked into a Linux container
+# fails at runtime with a "bad interpreter" error, so we force LF here rather than relying on local
+# git/editor configuration.
+
+* text=auto eol=lf
+
+*.sh       text eol=lf
+*.go       text eol=lf
+*.proto    text eol=lf
+*.py       text eol=lf
+*.sql      text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.json     text eol=lf
+*.ts       text eol=lf
+*.tsx      text eol=lf
+Makefile   text eol=lf
+Dockerfile text eol=lf
+Dockerfile.* text eol=lf
+
+# Binary/generated assets should never be line-ending-normalized
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
