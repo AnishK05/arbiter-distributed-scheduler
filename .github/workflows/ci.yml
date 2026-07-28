@@ -24,9 +24,11 @@ jobs:
         run: go vet ./...
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          # .golangci.yml uses the v2 config schema (`version: "2"`), which requires
+          # golangci-lint v2 and action v7+ (v6 and earlier default to resolving a v1 binary).
+          version: v2.12.2
 
       - name: Test
         run: go test ./... -race -count=1
