@@ -1,0 +1,155 @@
+syntax = "proto3";
+
+package arbiter.v1;
+
+option go_package = "github.com/AnishK05/arbiter-distributed-scheduler/gen/arbiter/v1;arbiterv1";
+
+// ClusterControl is the internal cluster protocol used between worker agents
+// and the scheduler: node registration, heartbeats, and task status
+// reporting. See IMPLEMENTATION_PLAN.md Section 7 for design rationale.
+service ClusterControl {
+  // RegisterNode is called once by a worker agent on startup (and again if it
+  // is ever told its epoch is invalid) to join the cluster.
+  rpc RegisterNode(RegisterNodeRequest) returns (RegisterNodeResponse);
+
+  // Heartbeat is a periodic (unary, for now) call from a worker reporting its
+  // liveness and current allocated resources. See IMPLEMENTATION_PLAN.md
+  // Section 7 for the note on upgrading this to bidirectional streaming.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // ReportTaskStatus is used by a worker to push an immediate task status
+  // change (e.g. succeeded/failed) rather than waiting for the next
+  // heartbeat.
+  rpc ReportTaskStatus(TaskStatusUpdate) returns (Ack);
+}
+
+// SchedulerAPI is the client-facing API used by arbiterctl, the dashboard,
+// and other clients to submit and observe work.
+service SchedulerAPI {
+  rpc SubmitJob(SubmitJobRequest) returns (Job);
+  rpc GetJob(GetJobRequest) returns (Job);
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+  rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+  rpc CancelJob(CancelJobRequest) returns (Ack);
+}
+
+message NodeResources {
+  int64 cpu_millicores = 1;
+  int64 memory_mb = 2;
+}
+
+message RegisterNodeRequest {
+  string hostname = 1;
+  string address = 2;
+  NodeResources capacity = 3;
+  map<string, string> labels = 4;
+}
+
+message RegisterNodeResponse {
+  string node_id = 1;
+  int64 epoch = 2;
+  int32 heartbeat_interval_ms = 3;
+}
+
+message HeartbeatRequest {
+  string node_id = 1;
+  int64 epoch = 2;
+  NodeResources allocated = 3;
+  repeated TaskStatusUpdate task_updates = 4;
+}
+
+message HeartbeatResponse {
+  repeated TaskAssignment new_assignments = 1;
+  repeated string cancel_task_ids = 2;
+  bool epoch_invalid = 3;
+}
+
+message TaskAssignment {
+  string task_id = 1;
+  string image = 2;
+  repeated string command = 3;
+  NodeResources request = 4;
+  int64 assigned_epoch = 5;
+}
+
+message TaskStatusUpdate {
+  string task_id = 1;
+  string status = 2; // running|succeeded|failed
+  int32 exit_code = 3;
+  string error = 4;
+}
+
+message Ack {}
+
+message Node {
+  string id = 1;
+  string hostname = 2;
+  string address = 3;
+  NodeResources capacity = 4;
+  NodeResources allocated = 5;
+  map<string, string> labels = 6;
+  string status = 7; // unknown|ready|not_ready|dead|cordoned
+  int64 epoch = 8;
+}
+
+message Task {
+  string id = 1;
+  string job_id = 2;
+  string status = 3; // pending|scheduled|running|succeeded|failed|orphaned|cancelled
+  string assigned_node_id = 4;
+  int32 retries_used = 5;
+  int32 exit_code = 6;
+  string last_error = 7;
+}
+
+message Job {
+  string id = 1;
+  string name = 2;
+  string image = 3;
+  repeated string command = 4;
+  NodeResources request = 5;
+  int32 replicas = 6;
+  int32 retry_limit = 7;
+  string scheduling_policy = 8; // bin_pack|spread
+  map<string, string> constraints = 9;
+}
+
+message SubmitJobRequest {
+  string name = 1;
+  string image = 2;
+  repeated string command = 3;
+  NodeResources request = 4;
+  int32 replicas = 5;
+  int32 retry_limit = 6;
+  string scheduling_policy = 7;
+  map<string, string> constraints = 8;
+}
+
+message GetJobRequest {
+  string job_id = 1;
+}
+
+message ListJobsRequest {}
+
+message ListJobsResponse {
+  repeated Job jobs = 1;
+}
+
+message ListTasksRequest {
+  string job_id = 1; // optional filter
+}
+
+message ListTasksResponse {
+  repeated Task tasks = 1;
+}
+
+message ListNodesRequest {}
+
+message ListNodesResponse {
+  repeated Node nodes = 1;
+}
+
+message CancelJobRequest {
+  string job_id = 1;
+}
