@@ -1,0 +1,40 @@
+# Minimal local dev stack for Phase 0/1: just the durable/ephemeral data
+# stores. The scheduler and worker binaries are run directly on the host
+# (`make run-scheduler` / `make run-worker`) against these until Phase 1+
+# wire them into Compose too. See IMPLEMENTATION_PLAN.md Section 5 & 8.
+#
+# Usage: `make up` / `make down`, or `docker compose -f deploy/docker-compose.yml up`.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: arbiter-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: arbiter
+      POSTGRES_PASSWORD: arbiter
+      POSTGRES_DB: arbiter
+    ports:
+      - "5432:5432"
+    volumes:
+      - arbiter-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arbiter -d arbiter"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: arbiter-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  arbiter-postgres-data:

@@ -1,0 +1,17 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - unused
+    - errcheck
+    - staticcheck
+    - govet
+    - ineffassign
+
+  exclusions:
+    paths:
+      - gen/
