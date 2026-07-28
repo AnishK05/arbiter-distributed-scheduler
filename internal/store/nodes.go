@@ -71,6 +71,12 @@ func (s *Store) RegisterNode(ctx context.Context, params RegisterNodeParams) (*N
 		return nil, fmt.Errorf("store: marshal labels: %w", err)
 	}
 
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("store: register node: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	const q = `
 		INSERT INTO nodes (hostname, address, cpu_capacity_mc, mem_capacity_mb, labels, status, epoch, last_heartbeat_at)
 		VALUES ($1, $2, $3, $4, $5, $6, 0, now())
@@ -84,13 +90,95 @@ func (s *Store) RegisterNode(ctx context.Context, params RegisterNodeParams) (*N
 		RETURNING id, hostname, address, cpu_capacity_mc, mem_capacity_mb, labels, status, epoch, last_heartbeat_at, created_at
 	`
 
-	row := s.pool.QueryRow(ctx, q,
+	row := tx.QueryRow(ctx, q,
 		params.Hostname, params.Address, params.CPUCapacityMillicores, params.MemCapacityMB, labelsJSON, NodeStatusReady,
 	)
 
 	node, err := scanNode(row)
 	if err != nil {
 		return nil, fmt.Errorf("store: register node: %w", err)
+	}
+
+	msg := fmt.Sprintf("node registered: hostname=%s address=%s epoch=%d", node.Hostname, node.Address, node.Epoch)
+	if err := insertEvent(ctx, tx, EntityTypeNode, node.ID, EventTypeNodeRegistered, msg); err != nil {
+		return nil, fmt.Errorf("store: register node: insert event: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("store: register node: commit: %w", err)
+	}
+	return node, nil
+}
+
+// UpdateNodeStatus transitions a node to newStatus (without touching epoch)
+// and records an audit event, atomically. Used by the Heartbeat handler
+// (not_ready -> ready recovery) and the failure detector (ready -> not_ready).
+// Dying (-> dead) goes through MarkNodeDead instead, since that also bumps
+// epoch.
+func (s *Store) UpdateNodeStatus(ctx context.Context, nodeID, newStatus, eventType, message string) (*Node, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("store: update node status: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	const q = `
+		UPDATE nodes SET status = $2
+		WHERE id = $1
+		RETURNING id, hostname, address, cpu_capacity_mc, mem_capacity_mb, labels, status, epoch, last_heartbeat_at, created_at
+	`
+	node, err := scanNode(tx.QueryRow(ctx, q, nodeID, newStatus))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNodeNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: update node status: %w", err)
+	}
+
+	if err := insertEvent(ctx, tx, EntityTypeNode, node.ID, eventType, message); err != nil {
+		return nil, fmt.Errorf("store: update node status: insert event: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("store: update node status: commit: %w", err)
+	}
+	return node, nil
+}
+
+// MarkNodeDead transitions a node to "dead" and increments its epoch,
+// atomically with an audit event. Incrementing epoch here is the core of
+// the fencing mechanism (IMPLEMENTATION_PLAN.md Section 6.5): if the node
+// was actually alive behind a network partition rather than truly dead, its
+// next heartbeat/status report will carry a now-stale epoch and be rejected
+// (see internal/grpcapi.Heartbeat), forcing it to re-register before it's
+// trusted again.
+func (s *Store) MarkNodeDead(ctx context.Context, nodeID string) (*Node, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("store: mark node dead: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	const q = `
+		UPDATE nodes SET status = $2, epoch = epoch + 1
+		WHERE id = $1
+		RETURNING id, hostname, address, cpu_capacity_mc, mem_capacity_mb, labels, status, epoch, last_heartbeat_at, created_at
+	`
+	node, err := scanNode(tx.QueryRow(ctx, q, nodeID, NodeStatusDead))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNodeNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: mark node dead: %w", err)
+	}
+
+	msg := fmt.Sprintf("node marked dead after missed heartbeats, epoch bumped to %d", node.Epoch)
+	if err := insertEvent(ctx, tx, EntityTypeNode, node.ID, EventTypeNodeDead, msg); err != nil {
+		return nil, fmt.Errorf("store: mark node dead: insert event: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("store: mark node dead: commit: %w", err)
 	}
 	return node, nil
 }
@@ -135,6 +223,37 @@ func (s *Store) ListNodes(ctx context.Context) ([]Node, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: list nodes: %w", err)
+	}
+	return nodes, nil
+}
+
+// ListActiveNodes returns nodes the failure detector should be watching:
+// everything except those already "dead" or manually "cordoned" (dead nodes
+// stay dead until a fresh RegisterNode call, and cordoned is an explicit
+// manual state later phases will add tooling to set/unset).
+func (s *Store) ListActiveNodes(ctx context.Context) ([]Node, error) {
+	const q = `
+		SELECT id, hostname, address, cpu_capacity_mc, mem_capacity_mb, labels, status, epoch, last_heartbeat_at, created_at
+		FROM nodes
+		WHERE status NOT IN ($1, $2)
+		ORDER BY created_at ASC
+	`
+	rows, err := s.pool.Query(ctx, q, NodeStatusDead, NodeStatusCordoned)
+	if err != nil {
+		return nil, fmt.Errorf("store: list active nodes: %w", err)
+	}
+	defer rows.Close()
+
+	var nodes []Node
+	for rows.Next() {
+		node, err := scanNode(rows)
+		if err != nil {
+			return nil, fmt.Errorf("store: scan node row: %w", err)
+		}
+		nodes = append(nodes, *node)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list active nodes: %w", err)
 	}
 	return nodes, nil
 }

@@ -1,7 +1,8 @@
 // Command scheduler is the Arbiter control-plane binary. In later phases it
-// hosts the placement engine, failure detector, and leader-election loop; as
-// of Phase 1 it also owns the Postgres connection/migrations and serves
-// RegisterNode + ListNodes.
+// hosts the placement engine and leader-election loop; as of Phase 2 it also
+// owns the Postgres connection/migrations, the Redis connection, and serves
+// RegisterNode + Heartbeat + ListNodes, backed by a background failure
+// detector.
 package main
 
 import (
@@ -18,6 +19,8 @@ import (
 
 	arbiterv1 "github.com/AnishK05/arbiter-distributed-scheduler/gen/arbiter/v1"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/buildinfo"
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/cache"
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/failuredetector"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/grpcapi"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/health"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/store"
@@ -27,8 +30,10 @@ import (
 )
 
 const (
-	dbConnectMaxAttempts = 15
-	dbConnectRetryDelay  = 2 * time.Second
+	dbConnectMaxAttempts    = 15
+	dbConnectRetryDelay     = 2 * time.Second
+	redisConnectMaxAttempts = 15
+	redisConnectRetryDelay  = 2 * time.Second
 )
 
 func main() {
@@ -36,6 +41,8 @@ func main() {
 	httpAddr := flag.String("http-addr", ":8080", "address for the HTTP server (/healthz, later /metrics)")
 	postgresURL := flag.String("postgres-url", envOr("ARBITER_POSTGRES_URL", "postgres://arbiter:arbiter@localhost:5432/arbiter?sslmode=disable"), "PostgreSQL connection string")
 	migrationsPath := flag.String("migrations-path", "migrations", "filesystem path to the SQL migrations directory")
+	redisAddr := flag.String("redis-addr", envOr("ARBITER_REDIS_ADDR", "localhost:6379"), "Redis address (host:port or redis:// URL)")
+	heartbeatIntervalMS := flag.Int("heartbeat-interval-ms", 500, "heartbeat interval advertised to workers; the failure detector's thresholds are derived from this")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -44,6 +51,7 @@ func main() {
 		"commit", buildinfo.Commit,
 		"grpc_addr", *grpcAddr,
 		"http_addr", *httpAddr,
+		"heartbeat_interval_ms", *heartbeatIntervalMS,
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -52,7 +60,7 @@ func main() {
 	// Confirm Postgres is reachable (with retry, since it may still be
 	// starting up alongside us — e.g. in Docker Compose) before attempting
 	// migrations, which need a live connection themselves.
-	db, err := connectWithRetry(ctx, logger, *postgresURL)
+	db, err := connectPostgresWithRetry(ctx, logger, *postgresURL)
 	if err != nil {
 		logger.Error("failed to connect to database", "error", err)
 		os.Exit(1)
@@ -65,8 +73,25 @@ func main() {
 	}
 	logger.Info("database migrations applied")
 
+	rdb, err := connectRedisWithRetry(ctx, logger, *redisAddr)
+	if err != nil {
+		logger.Error("failed to connect to redis", "error", err)
+		os.Exit(1)
+	}
+	defer func() { _ = rdb.Close() }()
+
+	heartbeatInterval := time.Duration(*heartbeatIntervalMS) * time.Millisecond
+	detectorCfg := failuredetector.DefaultConfig(heartbeatInterval)
+	logger.Info("failure detector configured",
+		"poll_interval", detectorCfg.PollInterval,
+		"not_ready_after", detectorCfg.NotReadyAfter,
+		"dead_after", detectorCfg.DeadAfter,
+	)
+	detector := failuredetector.New(db, rdb, logger, detectorCfg)
+	go detector.Run(ctx)
+
 	grpcServer := grpc.NewServer()
-	server := grpcapi.New(db)
+	server := grpcapi.New(db, rdb, int32(*heartbeatIntervalMS))
 	arbiterv1.RegisterClusterControlServer(grpcServer, server)
 	arbiterv1.RegisterSchedulerAPIServer(grpcServer, server)
 	reflection.Register(grpcServer)
@@ -111,11 +136,11 @@ func main() {
 	logger.Info("arbiter-scheduler stopped")
 }
 
-// connectWithRetry guards against startup-ordering races (e.g. Docker
-// Compose bringing the scheduler up around the same time as Postgres) with a
-// bounded retry loop, on top of the healthcheck-based `depends_on` ordering
-// already configured in deploy/docker-compose.yml.
-func connectWithRetry(ctx context.Context, logger *slog.Logger, postgresURL string) (*store.Store, error) {
+// connectPostgresWithRetry guards against startup-ordering races (e.g.
+// Docker Compose bringing the scheduler up around the same time as
+// Postgres) with a bounded retry loop, on top of the healthcheck-based
+// `depends_on` ordering already configured in deploy/docker-compose.yml.
+func connectPostgresWithRetry(ctx context.Context, logger *slog.Logger, postgresURL string) (*store.Store, error) {
 	var lastErr error
 	for attempt := 1; attempt <= dbConnectMaxAttempts; attempt++ {
 		db, err := store.Connect(ctx, postgresURL)
@@ -129,6 +154,26 @@ func connectWithRetry(ctx context.Context, logger *slog.Logger, postgresURL stri
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-time.After(dbConnectRetryDelay):
+		}
+	}
+	return nil, lastErr
+}
+
+// connectRedisWithRetry is connectPostgresWithRetry's counterpart for Redis.
+func connectRedisWithRetry(ctx context.Context, logger *slog.Logger, redisAddr string) (*cache.Client, error) {
+	var lastErr error
+	for attempt := 1; attempt <= redisConnectMaxAttempts; attempt++ {
+		rdb, err := cache.Connect(ctx, redisAddr)
+		if err == nil {
+			return rdb, nil
+		}
+		lastErr = err
+		logger.Warn("redis not ready yet, retrying", "attempt", attempt, "max_attempts", redisConnectMaxAttempts, "error", err)
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(redisConnectRetryDelay):
 		}
 	}
 	return nil, lastErr

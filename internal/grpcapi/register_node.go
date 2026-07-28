@@ -10,11 +10,6 @@ import (
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/store"
 )
 
-// defaultHeartbeatIntervalMS is advertised to workers in RegisterNodeResponse
-// so the interval is configured server-side. The failure detector (Phase 2)
-// will use the same constant to derive its missed-heartbeat threshold.
-const defaultHeartbeatIntervalMS = 1000
-
 // RegisterNode implements arbiterv1.ClusterControlServer. See
 // store.Store.RegisterNode for the upsert-by-(hostname,address) semantics.
 func (s *Server) RegisterNode(ctx context.Context, req *arbiterv1.RegisterNodeRequest) (*arbiterv1.RegisterNodeResponse, error) {
@@ -40,9 +35,16 @@ func (s *Server) RegisterNode(ctx context.Context, req *arbiterv1.RegisterNodeRe
 		return nil, status.Errorf(codes.Internal, "register node: %v", err)
 	}
 
+	// Seed Redis immediately so the failure detector's very first poll
+	// after registration sees a fresh heartbeat rather than a missing key
+	// (which it would otherwise have to treat as "maximally stale").
+	if err := s.cache.SetLastSeen(ctx, node.ID); err != nil {
+		return nil, status.Errorf(codes.Internal, "register node: seed last-seen: %v", err)
+	}
+
 	return &arbiterv1.RegisterNodeResponse{
 		NodeId:              node.ID,
 		Epoch:               node.Epoch,
-		HeartbeatIntervalMs: defaultHeartbeatIntervalMS,
+		HeartbeatIntervalMs: s.heartbeatIntervalMS,
 	}, nil
 }

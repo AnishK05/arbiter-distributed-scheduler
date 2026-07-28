@@ -10,8 +10,8 @@ leader election, fencing/fault-tolerance design, gRPC API, milestones, and bench
 lives in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). A quick-reference architecture summary
 with diagrams is in [`docs/architecture.md`](docs/architecture.md).
 
-**Status:** Phase 1 (node registration) — see [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md)
-Section 8 for the full milestone list.
+**Status:** Phase 2 (heartbeats & failure detection) — see
+[`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) Section 8 for the full milestone list.
 
 ## Tech Stack
 
@@ -89,7 +89,13 @@ make test   # go test ./... -race
 
 CI (`.github/workflows/ci.yml`) runs all three on every push/PR.
 
-`internal/store`'s tests are Postgres-backed integration tests; they skip themselves unless
-`ARBITER_TEST_POSTGRES_URL` is set. CI provides a Postgres service container automatically. To run
-them locally: `make up` (starts the dev Postgres), then
-`ARBITER_TEST_POSTGRES_URL="postgres://arbiter:arbiter@localhost:5432/arbiter?sslmode=disable" make test`.
+`internal/store`, `internal/cache`, and `internal/failuredetector`'s tests are backed by real
+Postgres/Redis integration tests; they skip themselves unless `ARBITER_TEST_POSTGRES_URL` /
+`ARBITER_TEST_REDIS_ADDR` are set. CI provides both service containers automatically. To run them
+locally: `docker compose -f deploy/docker-compose.yml up -d postgres redis`, then
+
+```bash
+ARBITER_TEST_POSTGRES_URL="postgres://arbiter:arbiter@localhost:5432/arbiter?sslmode=disable" \
+ARBITER_TEST_REDIS_ADDR="localhost:6379" \
+make test
+```

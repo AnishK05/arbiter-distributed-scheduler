@@ -19,6 +19,7 @@ migrate -path migrations -database "$ARBITER_POSTGRES_URL" down 1
 | Migration | Adds |
 |---|---|
 | `000001_create_nodes_table` | `nodes` table (Phase 1) |
+| `000002_create_events_table` | `events` audit-trail table (Phase 2) |
 
-`jobs`/`tasks` (Phase 3), `events` (Phase 2), and `leader_lease` (Phase 6) follow in their
-respective phases. See `IMPLEMENTATION_PLAN.md` Section 6.1 for the full schema design.
+`jobs`/`tasks` (Phase 3) and `leader_lease` (Phase 6) follow in their respective phases. See
+`IMPLEMENTATION_PLAN.md` Section 6.1 for the full schema design.

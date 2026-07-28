@@ -1,7 +1,7 @@
 // Command worker is the Arbiter worker-agent binary that will run on every
 // cluster node (simulated as a container in the demo cluster). As of
-// Phase 1 it registers itself with the scheduler on startup; heartbeats and
-// task execution are added starting Phase 2.
+// Phase 2 it registers itself with the scheduler on startup and then sends
+// periodic heartbeats; task execution is added starting Phase 3.
 package main
 
 import (
@@ -75,7 +75,7 @@ func main() {
 	defer func() { _ = conn.Close() }()
 
 	client := arbiterv1.NewClusterControlClient(conn)
-	regResp, err := registerWithRetry(ctx, logger, client, &arbiterv1.RegisterNodeRequest{
+	registerReq := &arbiterv1.RegisterNodeRequest{
 		Hostname: resolvedHostname,
 		Address:  resolvedAddress,
 		Capacity: &arbiterv1.NodeResources{
@@ -83,7 +83,8 @@ func main() {
 			MemoryMb:      *memCapacityMB,
 		},
 		Labels: map[string]string{},
-	})
+	}
+	regResp, err := registerWithRetry(ctx, logger, client, registerReq)
 	if err != nil {
 		logger.Error("failed to register with scheduler", "error", err)
 		os.Exit(1)
@@ -93,7 +94,9 @@ func main() {
 		"epoch", regResp.GetEpoch(),
 		"heartbeat_interval_ms", regResp.GetHeartbeatIntervalMs(),
 	)
-	logger.Info("heartbeats and task execution are not yet implemented (see IMPLEMENTATION_PLAN.md Phase 2+)")
+	logger.Info("task execution is not yet implemented (see IMPLEMENTATION_PLAN.md Phase 3+)")
+
+	go runHeartbeatLoop(ctx, logger, client, registerReq, regResp)
 
 	httpServer := &http.Server{
 		Addr:              *httpAddr,
@@ -141,6 +144,60 @@ func registerWithRetry(ctx context.Context, logger *slog.Logger, client arbiterv
 		}
 	}
 	return nil, lastErr
+}
+
+const defaultHeartbeatInterval = 500 * time.Millisecond
+
+// runHeartbeatLoop sends a Heartbeat every regResp.HeartbeatIntervalMs until
+// ctx is cancelled. If the scheduler ever responds with epoch_invalid=true
+// (this node was declared dead — its epoch was bumped — likely because it
+// was unreachable behind a network partition for long enough), it
+// re-registers from scratch to obtain a fresh epoch rather than continuing
+// to heartbeat with a now-rejected one. See IMPLEMENTATION_PLAN.md
+// Section 6.5 for the fencing rationale; killing locally-running task
+// containers on invalidation is added once tasks exist (Phase 3+5).
+func runHeartbeatLoop(ctx context.Context, logger *slog.Logger, client arbiterv1.ClusterControlClient, registerReq *arbiterv1.RegisterNodeRequest, initial *arbiterv1.RegisterNodeResponse) {
+	nodeID := initial.GetNodeId()
+	epoch := initial.GetEpoch()
+
+	interval := time.Duration(initial.GetHeartbeatIntervalMs()) * time.Millisecond
+	if interval <= 0 {
+		interval = defaultHeartbeatInterval
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			resp, err := client.Heartbeat(ctx, &arbiterv1.HeartbeatRequest{
+				NodeId: nodeID,
+				Epoch:  epoch,
+				// No tasks exist yet (Phase 3+), so there's nothing
+				// allocated to report.
+				Allocated: &arbiterv1.NodeResources{CpuMillicores: 0, MemoryMb: 0},
+			})
+			if err != nil {
+				logger.Warn("heartbeat failed, will retry next interval", "node_id", nodeID, "error", err)
+				continue
+			}
+
+			if resp.GetEpochInvalid() {
+				logger.Warn("scheduler rejected this node's epoch (marked dead); re-registering", "node_id", nodeID, "epoch", epoch)
+				regResp, err := registerWithRetry(ctx, logger, client, registerReq)
+				if err != nil {
+					logger.Error("failed to re-register after epoch invalidation", "error", err)
+					continue
+				}
+				nodeID = regResp.GetNodeId()
+				epoch = regResp.GetEpoch()
+				logger.Info("re-registered with scheduler", "node_id", nodeID, "epoch", epoch)
+			}
+		}
+	}
 }
 
 func envOr(key, fallback string) string {
