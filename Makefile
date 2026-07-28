@@ -59,8 +59,8 @@ tidy: ## Tidy go.mod/go.sum
 	go mod tidy
 
 .PHONY: up
-up: ## Start the local dev stack (Postgres + Redis) in the background
-	docker compose -f deploy/docker-compose.yml up -d
+up: ## Start the local dev stack (Postgres + Redis + 1 scheduler + 1 worker) in the background
+	docker compose -f deploy/docker-compose.yml up -d --build
 
 .PHONY: down
 down: ## Stop the local dev stack

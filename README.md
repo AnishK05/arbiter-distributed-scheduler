@@ -10,8 +10,8 @@ leader election, fencing/fault-tolerance design, gRPC API, milestones, and bench
 lives in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). A quick-reference architecture summary
 with diagrams is in [`docs/architecture.md`](docs/architecture.md).
 
-**Status:** Phase 0 (scaffolding) — see [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) Section 8
-for the full milestone list.
+**Status:** Phase 1 (node registration) — see [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md)
+Section 8 for the full milestone list.
 
 ## Tech Stack
 
@@ -50,18 +50,26 @@ installed.
 ## Quickstart
 
 ```bash
-# Bring up Postgres + Redis
+# Bring up Postgres + Redis + 1 scheduler + 1 worker (containerized)
 make up
-
-# In separate terminals: build and run the scheduler and worker binaries
-make run-scheduler
-make run-worker
 
 # Scheduler health check
 curl http://localhost:8080/healthz
 
+# Confirm the worker registered
+docker exec arbiter-postgres psql -U arbiter -d arbiter -c "SELECT hostname, address, status, epoch FROM nodes;"
+
 # Tear down
 make down
+```
+
+For faster edit/rebuild cycles, run the scheduler/worker binaries directly on the host (against the
+same Dockerized Postgres/Redis) instead of rebuilding containers on every change:
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d postgres redis
+make run-scheduler   # separate terminal
+make run-worker      # separate terminal
 ```
 
 Run `make help` to see all available targets (build, test, lint, proto codegen, etc.).
@@ -80,3 +88,8 @@ make test   # go test ./... -race
 ```
 
 CI (`.github/workflows/ci.yml`) runs all three on every push/PR.
+
+`internal/store`'s tests are Postgres-backed integration tests; they skip themselves unless
+`ARBITER_TEST_POSTGRES_URL` is set. CI provides a Postgres service container automatically. To run
+them locally: `make up` (starts the dev Postgres), then
+`ARBITER_TEST_POSTGRES_URL="postgres://arbiter:arbiter@localhost:5432/arbiter?sslmode=disable" make test`.

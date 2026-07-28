@@ -1,9 +1,14 @@
-# Minimal local dev stack for Phase 0/1: just the durable/ephemeral data
-# stores. The scheduler and worker binaries are run directly on the host
-# (`make run-scheduler` / `make run-worker`) against these until Phase 1+
-# wire them into Compose too. See IMPLEMENTATION_PLAN.md Section 5 & 8.
+# Local dev stack: Postgres + Redis, plus one scheduler replica and one
+# worker node — enough to exercise node registration end to end (Phase 1).
+# Additional scheduler replicas (leader election, Phase 6) and more workers
+# (bin-packing/chaos testing, Phase 4+) are added via a separate
+# docker-compose.demo.yml once those phases land; see
+# IMPLEMENTATION_PLAN.md Section 5 & 8.
 #
 # Usage: `make up` / `make down`, or `docker compose -f deploy/docker-compose.yml up`.
+# `make run-scheduler` / `make run-worker` remain available for running
+# either binary directly on the host (e.g. for faster edit/rebuild cycles)
+# against the Dockerized Postgres/Redis instead.
 
 services:
   postgres:
@@ -35,6 +40,44 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  scheduler:
+    build:
+      context: ..
+      dockerfile: Dockerfile.scheduler
+    container_name: arbiter-scheduler
+    restart: unless-stopped
+    environment:
+      ARBITER_POSTGRES_URL: postgres://arbiter:arbiter@postgres:5432/arbiter?sslmode=disable
+    ports:
+      - "7000:7000"
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile.worker
+    container_name: arbiter-worker-1
+    restart: unless-stopped
+    environment:
+      ARBITER_SCHEDULER_ADDR: scheduler:7000
+    command:
+      - "--hostname=worker-1"
+      - "--cpu-capacity-millicores=1000"
+      - "--mem-capacity-mb=512"
+    ports:
+      - "8081:8081"
+    depends_on:
+      scheduler:
+        condition: service_healthy
 
 volumes:
   arbiter-postgres-data:
