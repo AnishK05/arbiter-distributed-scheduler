@@ -10,19 +10,24 @@ package grpcapi
 
 import (
 	arbiterv1 "github.com/AnishK05/arbiter-distributed-scheduler/gen/arbiter/v1"
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/store"
 )
 
 // Server implements both arbiterv1.ClusterControlServer and
 // arbiterv1.SchedulerAPIServer. Embedding the generated Unimplemented*
-// structs means every RPC correctly returns a codes.Unimplemented error
-// until it's overridden with a real implementation in a later phase.
+// structs means every RPC not yet overridden still correctly returns a
+// codes.Unimplemented error, so this struct can grow one real method at a
+// time across phases without breaking the build.
 type Server struct {
 	arbiterv1.UnimplementedClusterControlServer
 	arbiterv1.UnimplementedSchedulerAPIServer
+
+	store *store.Store
 }
 
-// New constructs a Server with no dependencies wired up yet. Later phases
-// will take a *store.Store, *cache.Client, etc. as constructor arguments.
-func New() *Server {
-	return &Server{}
+// New constructs a Server backed by the given store. Later phases will add
+// further dependencies (e.g. *cache.Client for heartbeats, the placement
+// engine, the leader-election handle) as constructor arguments.
+func New(s *store.Store) *Server {
+	return &Server{store: s}
 }

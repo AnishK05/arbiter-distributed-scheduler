@@ -9,6 +9,23 @@ jobs:
   go:
     name: Go build, vet, lint, test
     runs-on: ubuntu-latest
+    # Postgres backs internal/store's integration tests (see
+    # ARBITER_TEST_POSTGRES_URL below); they skip themselves if this env var
+    # is unset, but CI always provides it so they run on every push/PR.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: arbiter
+          POSTGRES_PASSWORD: arbiter
+          POSTGRES_DB: arbiter
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U arbiter -d arbiter"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -31,4 +48,6 @@ jobs:
           version: v2.12.2
 
       - name: Test
+        env:
+          ARBITER_TEST_POSTGRES_URL: postgres://arbiter:arbiter@localhost:5432/arbiter?sslmode=disable
         run: go test ./... -race -count=1
