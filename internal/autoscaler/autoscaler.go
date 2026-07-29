@@ -172,7 +172,13 @@ func (r *Runner) tick(ctx context.Context) error {
 
 	autoscaledNodes := filterAutoscaled(nodes)
 	if r.metrics != nil {
-		r.metrics.AutoscaledWorkers.Set(float64(len(autoscaledNodes)))
+		live := 0
+		for _, n := range autoscaledNodes {
+			if n.Status != store.NodeStatusDead {
+				live++
+			}
+		}
+		r.metrics.AutoscaledWorkers.Set(float64(live))
 	}
 
 	now := time.Now()
