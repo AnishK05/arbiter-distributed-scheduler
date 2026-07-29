@@ -8,6 +8,8 @@ package executor
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,6 +34,7 @@ type TaskSpec struct {
 // Result is reported when a container reaches a terminal state.
 type Result struct {
 	TaskID   string
+	RunID    string
 	Status   string // succeeded | failed
 	ExitCode int32
 	Error    string
@@ -108,10 +111,11 @@ func (e *Executor) Start(ctx context.Context, spec TaskSpec) error {
 	e.running[spec.TaskID] = cancel
 	e.mu.Unlock()
 
-	containerID, err := e.createAndStart(ctx, spec)
+	containerID, runID, err := e.createAndStart(ctx, spec)
 	if err != nil {
 		e.finish(spec.TaskID, cancel, Result{
 			TaskID:   spec.TaskID,
+			RunID:    runID,
 			Status:   "failed",
 			ExitCode: 1,
 			Error:    err.Error(),
@@ -120,7 +124,7 @@ func (e *Executor) Start(ctx context.Context, spec TaskSpec) error {
 	}
 
 	go func() {
-		res := e.waitForExit(runCtx, containerID, spec.TaskID)
+		res := e.waitForExit(runCtx, containerID, spec.TaskID, runID)
 		e.finish(spec.TaskID, cancel, res)
 	}()
 	return nil
@@ -155,19 +159,20 @@ func (e *Executor) StopAll() {
 	}
 }
 
-func (e *Executor) createAndStart(ctx context.Context, spec TaskSpec) (string, error) {
+func (e *Executor) createAndStart(ctx context.Context, spec TaskSpec) (containerID, runID string, err error) {
 	name := containerName(spec.TaskID)
 	_ = e.removeContainer(ctx, name)
 
-	// Resource requests (CPU/memory) are enforced by the scheduler's
-	// accounting, not via Docker cgroup limits. Applying NanoCpus/Memory
-	// here fails on some nested/cgroup-v2 hosts ("cannot enter cgroupv2 …
-	// with domain controllers — it is in threaded mode"), so we deliberately
-	// omit them. Capacity is still tracked in Postgres via job requests.
+	runID = newRunID()
 	createBody := map[string]any{
 		"Image": spec.Image,
+		"Env": []string{
+			"ARBITER_TASK_ID=" + spec.TaskID,
+			"ARBITER_RUN_ID=" + runID,
+		},
 		"Labels": map[string]string{
 			"arbiter.task_id":        spec.TaskID,
+			"arbiter.run_id":         runID,
 			"arbiter.managed":        "true",
 			"arbiter.cpu_request_mc": fmt.Sprintf("%d", spec.CPURequestMillicores),
 			"arbiter.mem_request_mb": fmt.Sprintf("%d", spec.MemRequestMB),
@@ -181,48 +186,48 @@ func (e *Executor) createAndStart(ctx context.Context, spec TaskSpec) (string, e
 	}
 	raw, err := json.Marshal(createBody)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	createURL := "http://localhost/containers/create?name=" + url.QueryEscape(name)
 	resp, err := e.doJSON(ctx, http.MethodPost, createURL, raw, 30*time.Second)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		return "", fmt.Errorf("docker create: status %d: %s", resp.StatusCode, string(body))
+		return "", "", fmt.Errorf("docker create: status %d: %s", resp.StatusCode, string(body))
 	}
 	var created struct {
 		ID string `json:"Id"`
 	}
 	if err := json.Unmarshal(body, &created); err != nil || created.ID == "" {
-		return "", fmt.Errorf("docker create: invalid response")
+		return "", "", fmt.Errorf("docker create: invalid response")
 	}
 
 	startURL := "http://localhost/containers/" + created.ID + "/start"
 	startResp, err := e.doJSON(ctx, http.MethodPost, startURL, nil, 30*time.Second)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	startBody, _ := io.ReadAll(startResp.Body)
 	_ = startResp.Body.Close()
 	if startResp.StatusCode >= 300 {
-		return "", fmt.Errorf("docker start: status %d: %s", startResp.StatusCode, string(startBody))
+		return "", "", fmt.Errorf("docker start: status %d: %s", startResp.StatusCode, string(startBody))
 	}
-	return created.ID, nil
+	return created.ID, runID, nil
 }
 
-func (e *Executor) waitForExit(ctx context.Context, containerID, taskID string) Result {
+func (e *Executor) waitForExit(ctx context.Context, containerID, taskID, runID string) Result {
 	waitURL := "http://localhost/containers/" + containerID + "/wait"
 	waitResp, err := e.doJSON(ctx, http.MethodPost, waitURL, nil, 0)
 	if err != nil {
 		if ctx.Err() != nil {
 			_ = e.killContainer(context.Background(), containerID)
-			return Result{TaskID: taskID, Status: "failed", ExitCode: 137, Error: "canceled"}
+			return Result{TaskID: taskID, RunID: runID, Status: "failed", ExitCode: 137, Error: "canceled"}
 		}
-		return Result{TaskID: taskID, Status: "failed", ExitCode: 1, Error: err.Error()}
+		return Result{TaskID: taskID, RunID: runID, Status: "failed", ExitCode: 1, Error: err.Error()}
 	}
 	defer func() { _ = waitResp.Body.Close() }()
 	waitRaw, _ := io.ReadAll(waitResp.Body)
@@ -235,12 +240,19 @@ func (e *Executor) waitForExit(ctx context.Context, containerID, taskID string) 
 	if exit != 0 {
 		return Result{
 			TaskID:   taskID,
+			RunID:    runID,
 			Status:   "failed",
 			ExitCode: exit,
 			Error:    fmt.Sprintf("exit code %d", exit),
 		}
 	}
-	return Result{TaskID: taskID, Status: "succeeded", ExitCode: 0}
+	return Result{TaskID: taskID, RunID: runID, Status: "succeeded", ExitCode: 0}
+}
+
+func newRunID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 func containerName(taskID string) string {

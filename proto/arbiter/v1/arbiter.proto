@@ -78,6 +78,11 @@ message TaskStatusUpdate {
   string status = 2; // running|succeeded|failed
   int32 exit_code = 3;
   string error = 4;
+  // Fencing fields (Phase 5): the worker's current node identity and epoch.
+  // The scheduler rejects the update if they don't match the task's
+  // assignment (stale/zombie reports after a node was marked dead).
+  string node_id = 5;
+  int64 epoch = 6;
 }
 
 message Ack {}

@@ -25,11 +25,11 @@ func TestMarkNodeDeadBumpsEpochAndWritesEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarkNodeDead: %v", err)
 	}
-	if dead.Status != store.NodeStatusDead {
-		t.Fatalf("expected status %q, got %q", store.NodeStatusDead, dead.Status)
+	if dead.Node.Status != store.NodeStatusDead {
+		t.Fatalf("expected status %q, got %q", store.NodeStatusDead, dead.Node.Status)
 	}
-	if dead.Epoch != node.Epoch+1 {
-		t.Fatalf("expected epoch to increment from %d to %d, got %d", node.Epoch, node.Epoch+1, dead.Epoch)
+	if dead.Node.Epoch != node.Epoch+1 {
+		t.Fatalf("expected epoch to increment from %d to %d, got %d", node.Epoch, node.Epoch+1, dead.Node.Epoch)
 	}
 
 	events, err := db.ListEventsForEntity(ctx, store.EntityTypeNode, node.ID)

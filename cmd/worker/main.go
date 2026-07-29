@@ -155,8 +155,23 @@ type workerAgent struct {
 	client arbiterv1.ClusterControlClient
 	exec   *executor.Executor
 
-	mu    sync.Mutex
-	specs map[string]executor.TaskSpec
+	mu     sync.Mutex
+	specs  map[string]executor.TaskSpec
+	nodeID string
+	epoch  int64
+}
+
+func (a *workerAgent) setIdentity(nodeID string, epoch int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.nodeID = nodeID
+	a.epoch = epoch
+}
+
+func (a *workerAgent) identity() (nodeID string, epoch int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.nodeID, a.epoch
 }
 
 func (a *workerAgent) handleTaskDone(result executor.Result) {
@@ -166,11 +181,13 @@ func (a *workerAgent) handleTaskDone(result executor.Result) {
 
 	a.logger.Info("task finished",
 		"task_id", result.TaskID,
+		"run_id", result.RunID,
 		"status", result.Status,
 		"exit_code", result.ExitCode,
 		"error", result.Error,
 	)
 
+	nodeID, epoch := a.identity()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, err := a.client.ReportTaskStatus(ctx, &arbiterv1.TaskStatusUpdate{
@@ -178,6 +195,8 @@ func (a *workerAgent) handleTaskDone(result executor.Result) {
 		Status:   result.Status,
 		ExitCode: result.ExitCode,
 		Error:    result.Error,
+		NodeId:   nodeID,
+		Epoch:    epoch,
 	})
 	if err != nil {
 		a.logger.Warn("failed to report task status", "task_id", result.TaskID, "error", err)
@@ -185,8 +204,7 @@ func (a *workerAgent) handleTaskDone(result executor.Result) {
 }
 
 func (a *workerAgent) runHeartbeatLoop(ctx context.Context, registerReq *arbiterv1.RegisterNodeRequest, initial *arbiterv1.RegisterNodeResponse) {
-	nodeID := initial.GetNodeId()
-	epoch := initial.GetEpoch()
+	a.setIdentity(initial.GetNodeId(), initial.GetEpoch())
 
 	interval := time.Duration(initial.GetHeartbeatIntervalMs()) * time.Millisecond
 	if interval <= 0 {
@@ -201,6 +219,7 @@ func (a *workerAgent) runHeartbeatLoop(ctx context.Context, registerReq *arbiter
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			nodeID, epoch := a.identity()
 			a.mu.Lock()
 			cpu, mem := a.exec.AllocatedResources(a.specs)
 			a.mu.Unlock()
@@ -231,20 +250,28 @@ func (a *workerAgent) runHeartbeatLoop(ctx context.Context, registerReq *arbiter
 					a.logger.Error("failed to re-register after epoch invalidation", "error", err)
 					continue
 				}
-				nodeID = regResp.GetNodeId()
-				epoch = regResp.GetEpoch()
-				a.logger.Info("re-registered with scheduler", "node_id", nodeID, "epoch", epoch)
+				a.setIdentity(regResp.GetNodeId(), regResp.GetEpoch())
+				a.logger.Info("re-registered with scheduler", "node_id", regResp.GetNodeId(), "epoch", regResp.GetEpoch())
 				continue
 			}
 
-			a.handleAssignments(ctx, resp.GetNewAssignments())
+			a.handleAssignments(resp.GetNewAssignments())
 		}
 	}
 }
 
-func (a *workerAgent) handleAssignments(ctx context.Context, assignments []*arbiterv1.TaskAssignment) {
+func (a *workerAgent) handleAssignments(assignments []*arbiterv1.TaskAssignment) {
+	_, epoch := a.identity()
 	for _, assignment := range assignments {
 		if a.exec.IsRunning(assignment.GetTaskId()) {
+			continue
+		}
+		if assignment.GetAssignedEpoch() != epoch {
+			a.logger.Warn("refusing assignment with mismatched epoch",
+				"task_id", assignment.GetTaskId(),
+				"assigned_epoch", assignment.GetAssignedEpoch(),
+				"node_epoch", epoch,
+			)
 			continue
 		}
 		spec := executor.TaskSpec{
@@ -264,22 +291,21 @@ func (a *workerAgent) handleAssignments(ctx context.Context, assignments []*arbi
 			"image", spec.Image,
 			"cpu_mc", spec.CPURequestMillicores,
 			"mem_mb", spec.MemRequestMB,
+			"assigned_epoch", assignment.GetAssignedEpoch(),
 		)
 
-		// Launch asynchronously so a slow docker create/start can't stall
-		// the heartbeat loop past the failure-detector dead threshold.
 		go a.startAssignedTask(spec)
 	}
 }
 
 func (a *workerAgent) startAssignedTask(spec executor.TaskSpec) {
-	// Report running as soon as we accept the assignment (before/while
-	// the container starts) so the control plane's resource accounting
-	// reflects the reservation promptly.
+	nodeID, epoch := a.identity()
 	reportCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	_, err := a.client.ReportTaskStatus(reportCtx, &arbiterv1.TaskStatusUpdate{
 		TaskId: spec.TaskID,
 		Status: "running",
+		NodeId: nodeID,
+		Epoch:  epoch,
 	})
 	cancel()
 	if err != nil {
@@ -288,7 +314,6 @@ func (a *workerAgent) startAssignedTask(spec executor.TaskSpec) {
 
 	if err := a.exec.Start(context.Background(), spec); err != nil {
 		a.logger.Error("failed to start task container", "task_id", spec.TaskID, "error", err)
-		// onDone already reports failed for start errors.
 	}
 }
 

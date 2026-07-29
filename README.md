@@ -10,7 +10,7 @@ leader election, fencing/fault-tolerance design, gRPC API, milestones, and bench
 lives in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). A quick-reference architecture summary
 with diagrams is in [`docs/architecture.md`](docs/architecture.md).
 
-**Status:** Phase 4 (bin-packing & pluggable scheduling policies) — see
+**Status:** Phase 5 (retries, orphaning, reassignment, fencing) — see
 [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) Section 8 for the full milestone list.
 
 ## Tech Stack
@@ -67,6 +67,10 @@ make build
 make phase4-up
 python3 scripts/load_test.py --replicas 100 --cpu-millicores 50 --policy bin_pack
 python3 scripts/load_test.py --replicas 100 --cpu-millicores 50 --policy spread
+
+# Phase 5: chaos (kill/pause workers) while a job is in flight
+./bin/arbiterctl submit chaos --replicas 20 --cpu-millicores 50 --memory-mb 32 --command 45 &
+python3 scripts/chaos_monkey.py --duration-s 40 --interval-s 5
 
 # Tear down
 make down

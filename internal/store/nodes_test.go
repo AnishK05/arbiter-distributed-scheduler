@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -36,8 +37,18 @@ func testDB(t *testing.T) *store.Store {
 		t.Fatalf("connect for truncate: %v", err)
 	}
 	defer rawPool.Close()
-	if _, err := rawPool.Exec(context.Background(), "TRUNCATE tasks, jobs, events, nodes CASCADE"); err != nil {
-		t.Fatalf("truncate tables: %v", err)
+	var truncateErr error
+	for attempt := 0; attempt < 8; attempt++ {
+		_, truncateErr = rawPool.Exec(context.Background(), "TRUNCATE tasks, jobs, events, nodes CASCADE")
+		if truncateErr == nil {
+			break
+		}
+		// Parallel packages share the CI Postgres instance; brief deadlocks on
+		// TRUNCATE are expected under `go test ./...`.
+		time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond)
+	}
+	if truncateErr != nil {
+		t.Fatalf("truncate tables: %v", truncateErr)
 	}
 
 	db, err := store.Connect(context.Background(), connString)

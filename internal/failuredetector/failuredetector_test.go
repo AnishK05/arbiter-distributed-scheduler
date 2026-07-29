@@ -180,7 +180,7 @@ func TestTickDoesNotReprocessAlreadyDeadNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetNode: %v", err)
 	}
-	if got.Epoch != dead.Epoch {
-		t.Fatalf("expected epoch to stay at %d for an already-dead node, got %d (ListActiveNodes should have excluded it)", dead.Epoch, got.Epoch)
+	if got.Epoch != dead.Node.Epoch {
+		t.Fatalf("expected epoch to stay at %d for an already-dead node, got %d (ListActiveNodes should have excluded it)", dead.Node.Epoch, got.Epoch)
 	}
 }

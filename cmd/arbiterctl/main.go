@@ -57,15 +57,15 @@ func newVersionCmd() *cobra.Command {
 
 func newSubmitCmd(schedulerAddr *string) *cobra.Command {
 	var (
-		image        string
-		command      []string
-		replicas     int32
-		cpuMC        int64
-		memMB        int64
-		policy       string
-		constraints  []string
-		wait         bool
-		waitFor      time.Duration
+		image       string
+		command     []string
+		replicas    int32
+		cpuMC       int64
+		memMB       int64
+		policy      string
+		constraints []string
+		wait        bool
+		waitFor     time.Duration
 	)
 
 	cmd := &cobra.Command{

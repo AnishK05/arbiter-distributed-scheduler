@@ -4,7 +4,8 @@
 // against configurable thresholds, and transitions status
 // ready -> not_ready -> dead accordingly, bumping epoch on the transition
 // to dead (see internal/store.MarkNodeDead and Section 6.5's fencing
-// rationale).
+// rationale). On dead, scheduled/running tasks are orphaned and requeued,
+// and leftover DooD task containers are reaped when a Docker client is set.
 //
 // This runs unconditionally on the sole scheduler replica for now; Phase 6
 // will gate it on "is the current leader" once multiple replicas exist.
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/cache"
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/dockerutil"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/store"
 )
 
@@ -50,17 +52,24 @@ func DefaultConfig(heartbeatInterval time.Duration) Config {
 type Detector struct {
 	store  *store.Store
 	cache  *cache.Client
+	docker *dockerutil.Client
 	logger *slog.Logger
 	cfg    Config
 }
 
-// New constructs a Detector. logger may be nil, in which case a no-op
-// discard logger is used (convenient for tests).
+// New constructs a Detector without Docker reaping (tests / hosts without a
+// socket). Prefer NewWithDocker in cmd/scheduler.
 func New(s *store.Store, c *cache.Client, logger *slog.Logger, cfg Config) *Detector {
+	return NewWithDocker(s, c, nil, logger, cfg)
+}
+
+// NewWithDocker is like New but installs a Docker client used to force-remove
+// orphaned task containers after a node is marked dead.
+func NewWithDocker(s *store.Store, c *cache.Client, docker *dockerutil.Client, logger *slog.Logger, cfg Config) *Detector {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Detector{store: s, cache: c, logger: logger, cfg: cfg}
+	return &Detector{store: s, cache: c, docker: docker, logger: logger, cfg: cfg}
 }
 
 // Run blocks, polling every cfg.PollInterval until ctx is cancelled.
@@ -78,9 +87,6 @@ func (d *Detector) Run(ctx context.Context) {
 	}
 }
 
-// tick evaluates every active node once. Exported indirectly via Run, but
-// kept as its own method so tests can call it directly without waiting on a
-// real ticker.
 func (d *Detector) tick(ctx context.Context) {
 	nodes, err := d.store.ListActiveNodes(ctx)
 	if err != nil {
@@ -100,25 +106,36 @@ func (d *Detector) evaluate(ctx context.Context, n store.Node) {
 		return
 	}
 
-	// No heartbeat on record at all (shouldn't normally happen —
-	// RegisterNode seeds this — but could follow a Redis restart/flush).
-	// Treat as maximally stale rather than skipping the node outright.
-	age := time.Duration(1<<63 - 1) // effectively "infinite"
+	age := time.Duration(1<<63 - 1)
 	if ok {
 		age = time.Since(lastSeen)
 	}
 
 	switch {
 	case age >= d.cfg.DeadAfter:
-		if _, err := d.store.MarkNodeDead(ctx, n.ID); err != nil {
+		result, err := d.store.MarkNodeDead(ctx, n.ID)
+		if err != nil {
 			d.logger.Error("failuredetector: mark node dead", "node_id", n.ID, "error", err)
 			return
 		}
-		d.logger.Warn("node marked dead", "node_id", n.ID, "hostname", n.Hostname, "last_seen_age", age)
+		d.logger.Warn("node marked dead",
+			"node_id", n.ID,
+			"hostname", n.Hostname,
+			"last_seen_age", age,
+			"orphaned_tasks", len(result.OrphanedTaskIDs),
+			"epoch", result.Node.Epoch,
+		)
+		if d.docker != nil && len(result.OrphanedTaskIDs) > 0 {
+			if err := d.docker.KillTaskContainers(ctx, result.OrphanedTaskIDs); err != nil {
+				d.logger.Warn("failuredetector: reap orphan containers", "error", err)
+			} else {
+				d.logger.Info("reaped orphan task containers", "count", len(result.OrphanedTaskIDs))
+			}
+		}
 
 	case age >= d.cfg.NotReadyAfter:
 		if n.Status != store.NodeStatusReady {
-			return // already not_ready; avoid a redundant write+event every tick
+			return
 		}
 		if _, err := d.store.UpdateNodeStatus(ctx, n.ID, store.NodeStatusNotReady, store.EventTypeNodeNotReady, "missed heartbeats; downgraded to not_ready"); err != nil {
 			d.logger.Error("failuredetector: mark node not_ready", "node_id", n.ID, "error", err)
@@ -126,9 +143,4 @@ func (d *Detector) evaluate(ctx context.Context, n store.Node) {
 		}
 		d.logger.Warn("node marked not_ready", "node_id", n.ID, "hostname", n.Hostname, "last_seen_age", age)
 	}
-
-	// A node recovering from not_ready back to ready happens immediately in
-	// the Heartbeat handler as soon as a fresh heartbeat arrives (see
-	// internal/grpcapi.Heartbeat), rather than waiting for this poll loop —
-	// no case needed here for that direction.
 }
