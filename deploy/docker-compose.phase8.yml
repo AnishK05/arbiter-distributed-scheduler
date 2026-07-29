@@ -1,0 +1,22 @@
+# Phase 8 overlay: Next.js dashboard on host port 3100.
+# Usage:
+#   make phase8-up
+# Dashboard: http://localhost:3100
+# API:       http://localhost:8080/api/v1/... (leader; followers return NOT_LEADER)
+
+services:
+  dashboard:
+    build:
+      context: ../dashboard
+      dockerfile: Dockerfile
+      args:
+        # Browser calls host-mapped scheduler HTTP from the user's machine.
+        NEXT_PUBLIC_API_BASE: http://localhost:8080
+    image: arbiter-dashboard:latest
+    container_name: arbiter-dashboard
+    restart: unless-stopped
+    ports:
+      - "3100:3000"
+    depends_on:
+      scheduler:
+        condition: service_healthy

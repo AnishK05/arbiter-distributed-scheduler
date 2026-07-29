@@ -1,12 +1,13 @@
 // Package cache is the Redis-backed ephemeral/fast-path state layer for
-// Arbiter: heartbeat last-seen timestamps for now, pub/sub for the
-// dashboard's live event feed in a later phase. It is never the source of
-// truth for durable cluster state — that's internal/store's job. See
-// IMPLEMENTATION_PLAN.md Section 6.1 for the rationale.
+// Arbiter: heartbeat last-seen timestamps and pub/sub for the dashboard's
+// live event feed (Phase 8). It is never the source of truth for durable
+// cluster state — that's internal/store's job. See IMPLEMENTATION_PLAN.md
+// Section 6.1 for the rationale.
 package cache
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -15,6 +16,10 @@ import (
 
 	"github.com/redis/go-redis/v9"
 )
+
+// ClusterEventsChannel is the Redis pub/sub channel the leader fans events
+// onto for SSE/WebSocket dashboard subscribers.
+const ClusterEventsChannel = "pubsub:cluster-events"
 
 // lastSeenTTL bounds how long a heartbeat timestamp survives in Redis
 // without being refreshed. It's set well above any realistic
@@ -94,13 +99,68 @@ func (c *Client) GetLastSeen(ctx context.Context, nodeID string) (t time.Time, o
 	return time.UnixMilli(ms), true, nil
 }
 
-// DeleteLastSeen removes the heartbeat key for nodeID, if present. Not used
-// yet (Phase 2 leaves stale keys to expire naturally), but a reasonable
-// primitive for later phases (e.g. cleanly forgetting a cordoned-and-removed
-// node rather than waiting out the TTL).
+// DeleteLastSeen removes the heartbeat key for nodeID, if present.
 func (c *Client) DeleteLastSeen(ctx context.Context, nodeID string) error {
 	if err := c.rdb.Del(ctx, lastSeenKey(nodeID)).Err(); err != nil {
 		return fmt.Errorf("cache: delete last seen: %w", err)
 	}
 	return nil
+}
+
+// ClusterEvent is the JSON payload published on ClusterEventsChannel.
+type ClusterEvent struct {
+	ID         int64     `json:"id"`
+	EntityType string    `json:"entity_type"`
+	EntityID   string    `json:"entity_id"`
+	EventType  string    `json:"event_type"`
+	Message    string    `json:"message"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// PublishClusterEvent publishes a durable-store event onto Redis pub/sub.
+func (c *Client) PublishClusterEvent(ctx context.Context, ev ClusterEvent) error {
+	payload, err := json.Marshal(ev)
+	if err != nil {
+		return fmt.Errorf("cache: marshal cluster event: %w", err)
+	}
+	if err := c.rdb.Publish(ctx, ClusterEventsChannel, payload).Err(); err != nil {
+		return fmt.Errorf("cache: publish cluster event: %w", err)
+	}
+	return nil
+}
+
+// SubscribeClusterEvents subscribes to ClusterEventsChannel. The returned
+// channel is closed when ctx is cancelled or the subscription fails.
+func (c *Client) SubscribeClusterEvents(ctx context.Context) (<-chan ClusterEvent, error) {
+	sub := c.rdb.Subscribe(ctx, ClusterEventsChannel)
+	if _, err := sub.Receive(ctx); err != nil {
+		_ = sub.Close()
+		return nil, fmt.Errorf("cache: subscribe cluster events: %w", err)
+	}
+	out := make(chan ClusterEvent, 64)
+	go func() {
+		defer close(out)
+		defer func() { _ = sub.Close() }()
+		ch := sub.Channel()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg, ok := <-ch:
+				if !ok {
+					return
+				}
+				var ev ClusterEvent
+				if err := json.Unmarshal([]byte(msg.Payload), &ev); err != nil {
+					continue
+				}
+				select {
+				case out <- ev:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
 }

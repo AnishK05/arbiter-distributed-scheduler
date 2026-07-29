@@ -46,7 +46,7 @@ graph TB
     WN <-- "gRPC: register / heartbeat / assign" --> S1
 
     CLI -- "gRPC / REST" --> S1
-    DASH -- "gRPC-gateway / REST / WS" --> S1
+    DASH -- "REST / SSE" --> S1
     PROM -- scrape --> S1
     PROM -- scrape --> S2
     PROM -- scrape --> S3
@@ -133,7 +133,7 @@ sequenceDiagram
 | `gen/` | Generated protobuf/gRPC Go code (from `proto/`, via `make proto`) |
 | `proto/` | `.proto` service/message definitions + buf config |
 | `migrations/` | SQL schema migrations |
-| `dashboard/` | Next.js + TypeScript web UI — Phase 8 |
+| `dashboard/` | Next.js web UI |
 | `scripts/` | Python tooling: load-test, chaos monkey, failover measurement |
 | `deploy/` | Docker Compose stacks, Prometheus/Grafana config |
 | `docs/` | This doc, design-decision notes, and archived benchmark output |

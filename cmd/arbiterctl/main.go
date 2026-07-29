@@ -6,7 +6,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -31,6 +35,7 @@ func main() {
 
 func newRootCmd() *cobra.Command {
 	var schedulerAddr string
+	var httpAddr string
 
 	root := &cobra.Command{
 		Use:           "arbiterctl",
@@ -39,10 +44,13 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: false,
 	}
 	root.PersistentFlags().StringVar(&schedulerAddr, "scheduler-addr", envOr("ARBITER_SCHEDULER_ADDR", "localhost:7000"), "gRPC address of the Arbiter scheduler's SchedulerAPI service")
+	root.PersistentFlags().StringVar(&httpAddr, "http-addr", envOr("ARBITER_HTTP_ADDR", ""), "scheduler HTTP base URL for logs (default: derive from --scheduler-addr, port 8080)")
 
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newSubmitCmd(&schedulerAddr))
 	root.AddCommand(newGetCmd(&schedulerAddr))
+	root.AddCommand(newDescribeCmd(&schedulerAddr))
+	root.AddCommand(newLogsCmd(&schedulerAddr, &httpAddr))
 
 	return root
 }
@@ -247,6 +255,103 @@ func newGetTasksCmd(schedulerAddr *string) *cobra.Command {
 	return cmd
 }
 
+func newDescribeCmd(schedulerAddr *string) *cobra.Command {
+	describe := &cobra.Command{
+		Use:   "describe",
+		Short: "Show details of a resource",
+	}
+	describe.AddCommand(&cobra.Command{
+		Use:   "task <task-id>",
+		Short: "Describe a task",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+			defer cancel()
+			client, closeFn, err := dialAPI(ctx, *schedulerAddr)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = closeFn() }()
+
+			task, err := client.GetTask(ctx, &arbiterv1.GetTaskRequest{TaskId: args[0]})
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(),
+				"ID:\t%s\nJOB:\t%s\nSTATUS:\t%s\nNODE:\t%s\nRETRIES:\t%d\nEXIT:\t%v\nERROR:\t%s\n",
+				task.GetId(), task.GetJobId(), task.GetStatus(), task.GetAssignedNodeId(),
+				task.GetRetriesUsed(), task.GetExitCode(), task.GetLastError(),
+			)
+			return err
+		},
+	})
+	return describe
+}
+
+func newLogsCmd(schedulerAddr, httpAddr *string) *cobra.Command {
+	var tail int
+	cmd := &cobra.Command{
+		Use:   "logs <task-id>",
+		Short: "Fetch container logs for a task (via scheduler Docker socket)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			base := *httpAddr
+			if base == "" {
+				base = deriveHTTPBase(*schedulerAddr)
+			}
+			url := fmt.Sprintf("%s/api/v1/tasks/%s/logs?tail=%d", strings.TrimRight(base, "/"), args[0], tail)
+			resp, err := http.Get(url) //nolint:gosec // local arbiterctl → scheduler
+			if err != nil {
+				return fmt.Errorf("fetch logs: %w", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return err
+			}
+			if resp.StatusCode >= 300 {
+				return fmt.Errorf("logs: %s", strings.TrimSpace(string(body)))
+			}
+			var parsed struct {
+				Logs  string `json:"logs"`
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(body, &parsed); err != nil {
+				return err
+			}
+			if parsed.Error != "" {
+				return fmt.Errorf("%s", parsed.Error)
+			}
+			_, err = fmt.Fprint(cmd.OutOrStdout(), parsed.Logs)
+			return err
+		},
+	}
+	cmd.Flags().IntVar(&tail, "tail", 200, "number of log lines to fetch")
+	return cmd
+}
+
+func deriveHTTPBase(grpcAddr string) string {
+	host := grpcAddr
+	if h, p, err := net.SplitHostPort(grpcAddr); err == nil {
+		host = h
+		_ = p
+	}
+	if host == "" || host == "0.0.0.0" {
+		host = "localhost"
+	}
+	// Map known phase6 host ports: 7000→8080, 7001→8086, 7002→8087
+	httpPort := "8080"
+	if _, p, err := net.SplitHostPort(grpcAddr); err == nil {
+		switch p {
+		case "7001":
+			httpPort = "8086"
+		case "7002":
+			httpPort = "8087"
+		}
+	}
+	return "http://" + net.JoinHostPort(host, httpPort)
+}
+
 func waitForJob(cmd *cobra.Command, client arbiterv1.SchedulerAPIClient, jobID string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -376,6 +481,16 @@ func (c *redirectingSchedulerAPI) GetJob(ctx context.Context, in *arbiterv1.GetJ
 	err := c.withRedirect(func(client arbiterv1.SchedulerAPIClient) error {
 		var callErr error
 		out, callErr = client.GetJob(ctx, in, opts...)
+		return callErr
+	})
+	return out, err
+}
+
+func (c *redirectingSchedulerAPI) GetTask(ctx context.Context, in *arbiterv1.GetTaskRequest, opts ...grpc.CallOption) (*arbiterv1.Task, error) {
+	var out *arbiterv1.Task
+	err := c.withRedirect(func(client arbiterv1.SchedulerAPIClient) error {
+		var callErr error
+		out, callErr = client.GetTask(ctx, in, opts...)
 		return callErr
 	})
 	return out, err

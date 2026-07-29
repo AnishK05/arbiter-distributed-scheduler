@@ -178,3 +178,20 @@ here whenever a phase's plan says "pick one, document the choice" or similar.
 - **Phase 7 compose overlay** (`make phase7-up`) stacks Phase 6 HA + Prometheus (:9090) + Grafana
   (:3000, admin/admin, anonymous Viewer). Provisioned dashboards: Cluster Overview, Task Throughput,
   Failover Events. See `docs/benchmarks/phase7-observability.md`.
+
+## Phase 8
+
+- **Thin hand-written JSON HTTP API** (`internal/httpapi`) on the scheduler's existing HTTP port
+  rather than grpc-gateway — stays inside the Go 1.22.2 pin and keeps SSE custom. Endpoints under
+  `/api/v1/{nodes,jobs,tasks,events}` plus `POST /api/v1/jobs`, task logs, and SSE
+  `/api/v1/events/stream`. Mutating calls on followers return `409 NOT_LEADER` with `leader_addr`
+  (dashboard follows).
+- **Redis pub/sub fan-out** (`pubsub:cluster-events`): a leader-only poller
+  (`internal/eventfanout`) tails Postgres `events` and publishes; SSE subscribers get a recent
+  snapshot then live Redis messages (with Postgres poll fallback).
+- **`arbiterctl describe task` / `logs`**: describe uses new gRPC `GetTask`; logs hit scheduler
+  HTTP `/api/v1/tasks/{id}/logs` (Docker label lookup on the shared host socket — workers and
+  schedulers all mount `/var/run/docker.sock`). Task containers use `AutoRemove: false` so logs
+  remain after exit; orphan cleanup still removes stale containers on node death.
+- **Dashboard** is Next.js (App Router) on host port **3100** (`make phase8-up`) so it does not
+  collide with Grafana on 3000. See `docs/benchmarks/phase8-dashboard.md`.

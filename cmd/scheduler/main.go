@@ -22,9 +22,11 @@ import (
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/cache"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/dockerutil"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/election"
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/eventfanout"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/failuredetector"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/grpcapi"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/health"
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/httpapi"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/metrics"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/scheduler"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/store"
@@ -42,7 +44,7 @@ const (
 
 func main() {
 	grpcAddr := flag.String("grpc-addr", ":7000", "address for the gRPC server (ClusterControl + SchedulerAPI)")
-	httpAddr := flag.String("http-addr", ":8080", "address for the HTTP server (/healthz, /metrics)")
+	httpAddr := flag.String("http-addr", ":8080", "address for the HTTP server (/healthz, /metrics, /api)")
 	postgresURL := flag.String("postgres-url", envOr("ARBITER_POSTGRES_URL", "postgres://arbiter:arbiter@localhost:5432/arbiter?sslmode=disable"), "PostgreSQL connection string")
 	migrationsPath := flag.String("migrations-path", "migrations", "filesystem path to the SQL migrations directory")
 	redisAddr := flag.String("redis-addr", envOr("ARBITER_REDIS_ADDR", "localhost:6379"), "Redis address (host:port or redis:// URL)")
@@ -138,6 +140,10 @@ func main() {
 
 	go met.RunClusterGauges(ctx, logger, db, elector, time.Second)
 
+	dockerClient := dockerutil.New()
+	go eventfanout.New(db, rdb, elector, logger).Run(ctx)
+	logger.Info("event fanout started")
+
 	grpcServer := grpc.NewServer()
 	server := grpcapi.New(db, rdb, int32(*heartbeatIntervalMS), elector, met)
 	arbiterv1.RegisterClusterControlServer(grpcServer, server)
@@ -157,9 +163,10 @@ func main() {
 		}
 	}()
 
+	api := httpapi.New(db, rdb, dockerClient, elector, logger, health.Mux(met.Handler()))
 	httpServer := &http.Server{
 		Addr:              *httpAddr,
-		Handler:           health.Mux(met.Handler()),
+		Handler:           api.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

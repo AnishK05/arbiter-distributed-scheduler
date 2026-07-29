@@ -28,6 +28,7 @@ service ClusterControl {
 service SchedulerAPI {
   rpc SubmitJob(SubmitJobRequest) returns (Job);
   rpc GetJob(GetJobRequest) returns (Job);
+  rpc GetTask(GetTaskRequest) returns (Task);
   rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
   rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
@@ -133,6 +134,10 @@ message SubmitJobRequest {
 
 message GetJobRequest {
   string job_id = 1;
+}
+
+message GetTaskRequest {
+  string task_id = 1;
 }
 
 message ListJobsRequest {}
