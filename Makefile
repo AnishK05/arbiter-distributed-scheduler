@@ -107,12 +107,13 @@ phase9-down: ## Stop the Phase 9 autoscaling stack
 	docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.phase6.yml -f deploy/docker-compose.phase7.yml -f deploy/docker-compose.phase8.yml -f deploy/docker-compose.phase9.yml down
 
 .PHONY: demo-up
-demo-up: ## Start the full demo cluster (schedulers, 10 workers, pg, redis, prometheus, grafana, dashboard)
-	docker compose -f deploy/docker-compose.demo.yml up --build
+demo-up: ## Start the full demo cluster (3 schedulers, 10 workers, pg, redis, prometheus, grafana, dashboard)
+	docker compose -f deploy/docker-compose.demo.yml up -d --build
 
 .PHONY: demo-down
-demo-down: ## Stop the full demo cluster
-	docker compose -f deploy/docker-compose.demo.yml down
+demo-down: ## Stop the full demo cluster (including autoscaled leftovers)
+	docker compose -f deploy/docker-compose.demo.yml down --remove-orphans
+	-docker ps -aq --filter label=arbiter.autoscaled=true | xargs -r docker rm -f
 
 .PHONY: clean
 clean: ## Remove build artifacts

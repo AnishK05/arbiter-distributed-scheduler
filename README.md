@@ -5,13 +5,53 @@ cousin of Kubernetes, Borg, Nomad, and Mesos. A cluster of worker nodes runs tas
 scheduler control plane decides where those tasks run, monitors node health via heartbeats, and
 automatically reassigns work when a node fails.
 
-The full, phase-by-phase implementation plan — architecture, data model, scheduling algorithm,
-leader election, fencing/fault-tolerance design, gRPC API, milestones, and benchmark methodology —
-lives in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). A quick-reference architecture summary
-with diagrams is in [`docs/architecture.md`](docs/architecture.md).
+**Resume claim this repo measures (see [`docs/benchmarks/phase10-resume-metrics.md`](docs/benchmarks/phase10-resume-metrics.md)):**
 
-**Status:** Phase 9 (simulated autoscaling) — see
-[`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) Section 8 for the full milestone list.
+> Built a cluster scheduler sustaining 500+ concurrent tasks across 10 nodes via leader-elected
+> coordination, heartbeat-based failure detection with sub-3s failover, bin-packing allocation, and
+> automatic task reassignment
+
+The full, phase-by-phase implementation plan lives in
+[`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). Architecture diagrams are in
+[`docs/architecture.md`](docs/architecture.md).
+
+**Status:** Phase 10 complete — demo cluster + archived Section 10 benchmarks.
+
+## Architecture
+
+```mermaid
+graph TB
+    subgraph ControlPlane["Control Plane (HA — 3 replicas)"]
+        S1["Scheduler Replica 1 (LEADER)"]
+        S2["Scheduler Replica 2 (follower)"]
+        S3["Scheduler Replica 3 (follower)"]
+    end
+
+    subgraph DataStores["Data Stores"]
+        PG[("PostgreSQL")]
+        R[("Redis")]
+    end
+
+    subgraph Workers["10 simulated worker containers"]
+        W1["worker-1 … worker-10"]
+    end
+
+    CLI["arbiterctl"]
+    DASH["Next.js Dashboard :3100"]
+    PROM["Prometheus :9090"]
+    GRAF["Grafana :3000"]
+
+    S1 <--> PG
+    S2 <--> PG
+    S3 <--> PG
+    S1 <--> R
+    W1 <-- "gRPC register / heartbeat / assign" --> S1
+    CLI -- "gRPC / REST" --> S1
+    DASH -- "REST / SSE" --> S1
+    PROM -- scrape --> S1
+    PROM -- scrape --> W1
+    GRAF -- query --> PROM
+```
 
 ## Tech Stack
 
@@ -32,72 +72,89 @@ Primary development happens on Windows. The recommended (and only supported) set
    an editor with WSL support, e.g. VS Code's "Remote - WSL" extension / Cursor's WSL support).
 
 This isn't a workaround — it's the standard way to do Linux-container-based backend development on
-Windows. See [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) Section 4 for the full rationale and
-the specific Windows pitfalls this design avoids (CRLF line endings, `SIGSTOP`-based fault
-injection, etc.).
+Windows. See [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) Section 4 for the full rationale.
 
 If you're on macOS/Linux natively, none of the above applies — just make sure Docker and Go are
 installed.
 
 ## Prerequisites
 
-- [Go](https://go.dev/dl/) 1.22+
+- [Go](https://go.dev/dl/) 1.22+ (repo pin: 1.22.2 / `GOTOOLCHAIN=local`)
 - [Docker](https://docs.docker.com/get-docker/) + Docker Compose v2
 - `make`
-- (Optional, only needed if you edit `.proto` files) [`buf`](https://buf.build/docs/installation),
-  `protoc-gen-go`, `protoc-gen-go-grpc` — run `make tools` to install all three via `go install`.
+- (Optional, only if you edit `.proto` files) run `make tools`
 
-## Quickstart
+## Demo cluster (recommended)
+
+One compose file brings up the full **10-node simulated cluster**:
 
 ```bash
-# Bring up Postgres + Redis + 1 scheduler + 1 worker (containerized)
-make up
+git clone https://github.com/AnishK05/arbiter-distributed-scheduler.git
+cd arbiter-distributed-scheduler
 
-# Scheduler health check
-curl http://localhost:8080/healthz
-
-# Confirm the worker registered
-docker exec arbiter-postgres psql -U arbiter -d arbiter -c "SELECT hostname, address, status, epoch FROM nodes;"
-
-# Phase 3 DoD: submit 5 replicas and wait for all to succeed
+make demo-up          # or: docker compose -f deploy/docker-compose.demo.yml up -d --build
 make build
+```
+
+| Surface | URL |
+|---|---|
+| **Dashboard** | http://localhost:3100 |
+| **Grafana** | http://localhost:3000 (admin/admin, anonymous Viewer) |
+| **Prometheus** | http://localhost:9090 |
+| Scheduler API / gRPC | http://localhost:8080 · `localhost:7000` (HA: `:7001`/`:7002`, `:8086`/`:8087`) |
+
+```bash
+# Confirm 10 ready workers
+curl -s http://localhost:8080/api/v1/nodes | python3 -c "import sys,json; print(sum(1 for n in json.load(sys.stdin)['nodes'] if n['status']=='ready'))"
+
+# Submit a small job
 ./bin/arbiterctl submit demo --replicas 5 --wait
 
-# Phase 4: 5-worker cluster + bin_pack vs spread placement comparison
-make phase4-up
+# Section 10 concurrency benchmark (archives → docs/benchmarks/phase10-resume-metrics.md)
+python3 scripts/load_test.py --tasks 750 --cpu-millicores 40 --memory-mb 32 \
+  --command 45 --wait-complete --policy bin_pack
+
+make demo-down
+```
+
+Worker capacities are **varied** (1000m–4000m) and total **23500m** simulated CPU so a packed burst
+can sustain 500+ concurrent running tasks. This is a simulated multi-node cluster on one machine
+(see Section 12 Q3 in the plan) — honest and normal for a project of this scope.
+
+## Incremental phase stacks
+
+For day-to-day development you can still bring up smaller stacks:
+
+```bash
+make up              # 1 scheduler + 1 worker
+make phase4-up       # + 5 equal workers (placement)
+make phase6-up       # 3 scheduler replicas (HA)
+make phase7-up       # + Prometheus/Grafana
+make phase8-up       # + dashboard :3100
+make phase9-up       # + simulated autoscaler
+```
+
+```bash
+# Phase 3 DoD
+./bin/arbiterctl submit demo --replicas 5 --wait
+
+# Phase 4 placement comparison
 python3 scripts/load_test.py --replicas 100 --cpu-millicores 50 --policy bin_pack
 python3 scripts/load_test.py --replicas 100 --cpu-millicores 50 --policy spread
 
-# Phase 5: chaos (kill/pause workers) while a job is in flight
+# Phase 5 chaos
 ./bin/arbiterctl submit chaos --replicas 20 --cpu-millicores 50 --memory-mb 32 --command 45 &
 python3 scripts/chaos_monkey.py --duration-s 40 --interval-s 5
 
-# Phase 6: 3 scheduler replicas; kill the leader and measure election time
-make phase6-up
+# Phase 6 leader failover
 python3 scripts/measure_leader_failover.py --trials 5 --submit-after
 
-# Phase 7: HA stack + Prometheus/Grafana (http://localhost:3000, admin/admin)
-make phase7-up
-./bin/arbiterctl submit load --replicas 20 --cpu-millicores 50 --memory-mb 32 --command 30
-# Open Grafana → Arbiter → Cluster Overview / Failover Events
-
-# Phase 8: dashboard + richer CLI
-make phase8-up
-# Open http://localhost:3100 — submit a job and watch tasks/events/utilization live
+# Phase 8 CLI
 ./bin/arbiterctl describe task <task-id>
 ./bin/arbiterctl logs <task-id>
-
-# Phase 9: simulated autoscaling (burst load → extra worker → idle reclaim)
-make phase9-up
-./bin/arbiterctl submit burst --replicas 40 --cpu-millicores 200 --memory-mb 64 --command 25
-# Watch events / Grafana → Arbiter Autoscaling for scale-up then scale-down
-
-# Tear down
-make down
 ```
 
-For faster edit/rebuild cycles, run the scheduler/worker binaries directly on the host (against the
-same Dockerized Postgres/Redis) instead of rebuilding containers on every change:
+For faster edit/rebuild cycles against Dockerized Postgres/Redis:
 
 ```bash
 docker compose -f deploy/docker-compose.yml up -d postgres redis
@@ -105,12 +162,11 @@ make run-scheduler   # separate terminal
 make run-worker      # separate terminal
 ```
 
-Run `make help` to see all available targets (build, test, lint, proto codegen, etc.).
+Run `make help` for all targets.
 
 ## Repository Layout
 
-See [`docs/architecture.md`](docs/architecture.md#repository-map) for a table of every top-level
-directory and what it's for.
+See [`docs/architecture.md`](docs/architecture.md#repository-map).
 
 ## Testing
 
@@ -122,13 +178,17 @@ make test   # go test ./... -race
 
 CI (`.github/workflows/ci.yml`) runs all three on every push/PR.
 
-`internal/store`, `internal/cache`, and `internal/failuredetector`'s tests are backed by real
-Postgres/Redis integration tests; they skip themselves unless `ARBITER_TEST_POSTGRES_URL` /
-`ARBITER_TEST_REDIS_ADDR` are set. CI provides both service containers automatically. To run them
-locally: `docker compose -f deploy/docker-compose.yml up -d postgres redis`, then
+`internal/store`, `internal/cache`, and `internal/failuredetector` integration tests skip unless
+`ARBITER_TEST_POSTGRES_URL` / `ARBITER_TEST_REDIS_ADDR` are set. CI provides both. Locally:
 
 ```bash
+docker compose -f deploy/docker-compose.yml up -d postgres redis
 ARBITER_TEST_POSTGRES_URL="postgres://arbiter:arbiter@localhost:5432/arbiter?sslmode=disable" \
 ARBITER_TEST_REDIS_ADDR="localhost:6379" \
 make test
 ```
+
+## Benchmarks
+
+Archived evidence for every phase DoD (and the Section 10 resume metrics) lives under
+[`docs/benchmarks/`](docs/benchmarks/).
