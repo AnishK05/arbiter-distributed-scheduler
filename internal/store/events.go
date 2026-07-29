@@ -16,11 +16,14 @@ const (
 	EventTypeNodeRecovered  = "node_recovered"
 	EventTypeNodeDead       = "node_dead"
 
-	EventTypeJobSubmitted  = "job_submitted"
-	EventTypeTaskScheduled = "task_scheduled"
-	EventTypeTaskRunning   = "task_running"
-	EventTypeTaskSucceeded = "task_succeeded"
-	EventTypeTaskFailed    = "task_failed"
+	EventTypeJobSubmitted       = "job_submitted"
+	EventTypeTaskScheduled      = "task_scheduled"
+	EventTypeTaskRunning        = "task_running"
+	EventTypeTaskSucceeded      = "task_succeeded"
+	EventTypeTaskFailed         = "task_failed"
+	EventTypeTaskOrphaned       = "task_orphaned"
+	EventTypeTaskRequeued       = "task_requeued"
+	EventTypeTaskRetryScheduled = "task_retry_scheduled"
 )
 
 // Entity types used in the events table's entity_type column.

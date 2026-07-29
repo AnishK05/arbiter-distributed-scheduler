@@ -145,14 +145,20 @@ func (s *Store) UpdateNodeStatus(ctx context.Context, nodeID, newStatus, eventTy
 	return node, nil
 }
 
-// MarkNodeDead transitions a node to "dead" and increments its epoch,
-// atomically with an audit event. Incrementing epoch here is the core of
-// the fencing mechanism (IMPLEMENTATION_PLAN.md Section 6.5): if the node
-// was actually alive behind a network partition rather than truly dead, its
-// next heartbeat/status report will carry a now-stale epoch and be rejected
-// (see internal/grpcapi.Heartbeat), forcing it to re-register before it's
-// trusted again.
-func (s *Store) MarkNodeDead(ctx context.Context, nodeID string) (*Node, error) {
+// MarkNodeDeadResult is returned by MarkNodeDead: the updated node plus the
+// task IDs that were orphaned and requeued for reassignment (so callers can
+// reap leftover Docker containers).
+type MarkNodeDeadResult struct {
+	Node            *Node
+	OrphanedTaskIDs []string
+}
+
+// MarkNodeDead transitions a node to "dead", increments its epoch, and
+// orphans + requeues every scheduled/running task on that node
+// (IMPLEMENTATION_PLAN.md Sections 6.4–6.5). Incrementing epoch is the core
+// of fencing: if the node was actually alive behind a partition, its next
+// heartbeat carries a stale epoch and is rejected.
+func (s *Store) MarkNodeDead(ctx context.Context, nodeID string) (*MarkNodeDeadResult, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("store: mark node dead: begin tx: %w", err)
@@ -177,10 +183,68 @@ func (s *Store) MarkNodeDead(ctx context.Context, nodeID string) (*Node, error) 
 		return nil, fmt.Errorf("store: mark node dead: insert event: %w", err)
 	}
 
+	orphanedIDs, err := orphanAndRequeueTasksTx(ctx, tx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("store: mark node dead: commit: %w", err)
 	}
-	return node, nil
+	return &MarkNodeDeadResult{Node: node, OrphanedTaskIDs: orphanedIDs}, nil
+}
+
+// orphanAndRequeueTasksTx marks scheduled/running tasks on nodeID as
+// orphaned (event) then immediately requeues them as pending for
+// reassignment. Returns the affected task IDs.
+func orphanAndRequeueTasksTx(ctx context.Context, tx pgx.Tx, nodeID string) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id FROM tasks
+		WHERE assigned_node_id = $1 AND status IN ($2, $3)
+		FOR UPDATE`,
+		nodeID, TaskStatusScheduled, TaskStatusRunning,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: list tasks to orphan: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	for _, id := range ids {
+		if err := insertEvent(ctx, tx, EntityTypeTask, id, EventTypeTaskOrphaned,
+			fmt.Sprintf("orphaned: assigned node %s marked dead", nodeID)); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE tasks
+			SET status = $2, assigned_node_id = NULL, assigned_epoch = NULL,
+			    scheduled_at = NULL, started_at = NULL, finished_at = NULL,
+			    next_retry_at = NULL,
+			    last_error = $3
+			WHERE id = $1`,
+			id, TaskStatusPending, "requeued after node failure"); err != nil {
+			return nil, fmt.Errorf("store: requeue orphaned task: %w", err)
+		}
+		if err := insertEvent(ctx, tx, EntityTypeTask, id, EventTypeTaskRequeued,
+			"requeued as pending for reassignment"); err != nil {
+			return nil, err
+		}
+	}
+	return ids, nil
 }
 
 // GetNode fetches a single node by ID.

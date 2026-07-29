@@ -118,3 +118,20 @@ here whenever a phase's plan says "pick one, document the choice" or similar.
 - **Phase 4 DoD cluster is a compose overlay, not the full demo file.**
   `deploy/docker-compose.phase4.yml` adds workers 2–5 beside the base stack (`make phase4-up`).
   The 10-worker `docker-compose.demo.yml` remains a Phase 10 deliverable.
+## Phase 5
+
+- **`MarkNodeDead` orphans and requeues in the same transaction as the epoch bump.** Every
+  `scheduled`/`running` task on the dead node is cleared back to `pending` (assignment wiped) with
+  `task_orphaned` + `task_requeued` events. Including `scheduled` (not only `running`) avoids
+  tasks stuck forever on a node that never started them.
+- **Failed tasks retry with exponential backoff via `next_retry_at`.** If `retries_used <
+  job.retry_limit`, a failure becomes `pending` again with backoff `500ms * 2^(n-1)` (capped at
+  16s). `ClaimPendingTasksForScheduling` ignores rows whose `next_retry_at` is still in the future.
+- **Status-report fencing uses `TaskStatusUpdate.node_id` + `epoch`.** Reports that do not match the
+  task's current assignment return `FailedPrecondition` / `ErrStaleTaskReport`, so a zombie worker
+  that reconnects after reassignment cannot complete (or fail) a task that now belongs elsewhere.
+- **Scheduler mounts the Docker socket to reap orphan DooD containers.** Killing a worker container
+  does not kill sibling task containers on the host daemon; the failure detector calls
+  `dockerutil.KillTaskContainers` for orphaned task IDs so reassignment cannot double-execute.
+- **Each container start gets a unique `ARBITER_RUN_ID`** (label + env). Workloads print it so chaos
+  runs can assert no duplicate successful executions for the same task.

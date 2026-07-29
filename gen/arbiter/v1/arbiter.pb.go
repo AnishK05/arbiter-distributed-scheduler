@@ -406,11 +406,16 @@ func (x *TaskAssignment) GetAssignedEpoch() int64 {
 }
 
 type TaskStatusUpdate struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
-	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"` // running|succeeded|failed
-	ExitCode      int32                  `protobuf:"varint,3,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
-	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	TaskId   string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	Status   string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"` // running|succeeded|failed
+	ExitCode int32                  `protobuf:"varint,3,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	Error    string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	// Fencing fields (Phase 5): the worker's current node identity and epoch.
+	// The scheduler rejects the update if they don't match the task's
+	// assignment (stale/zombie reports after a node was marked dead).
+	NodeId        string `protobuf:"bytes,5,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	Epoch         int64  `protobuf:"varint,6,opt,name=epoch,proto3" json:"epoch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -471,6 +476,20 @@ func (x *TaskStatusUpdate) GetError() string {
 		return x.Error
 	}
 	return ""
+}
+
+func (x *TaskStatusUpdate) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *TaskStatusUpdate) GetEpoch() int64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
 }
 
 type Ack struct {
@@ -1280,12 +1299,14 @@ const file_arbiter_v1_arbiter_proto_rawDesc = "" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12\x18\n" +
 	"\acommand\x18\x03 \x03(\tR\acommand\x123\n" +
 	"\arequest\x18\x04 \x01(\v2\x19.arbiter.v1.NodeResourcesR\arequest\x12%\n" +
-	"\x0eassigned_epoch\x18\x05 \x01(\x03R\rassignedEpoch\"v\n" +
+	"\x0eassigned_epoch\x18\x05 \x01(\x03R\rassignedEpoch\"\xa5\x01\n" +
 	"\x10TaskStatusUpdate\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x1b\n" +
 	"\texit_code\x18\x03 \x01(\x05R\bexitCode\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"\x05\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\x12\x17\n" +
+	"\anode_id\x18\x05 \x01(\tR\x06nodeId\x12\x14\n" +
+	"\x05epoch\x18\x06 \x01(\x03R\x05epoch\"\x05\n" +
 	"\x03Ack\"\xdb\x02\n" +
 	"\x04Node\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n" +

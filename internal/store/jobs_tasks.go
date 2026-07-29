@@ -34,6 +34,11 @@ var ErrJobNotFound = errors.New("store: job not found")
 // ErrTaskNotFound is returned by GetTask when no task exists with the given ID.
 var ErrTaskNotFound = errors.New("store: task not found")
 
+// ErrStaleTaskReport is returned when a worker status update carries a
+// node_id/epoch that no longer matches the task's assignment (zombie report
+// after fencing — IMPLEMENTATION_PLAN.md Section 6.5).
+var ErrStaleTaskReport = errors.New("store: stale task status report")
+
 // Job mirrors the `jobs` table (IMPLEMENTATION_PLAN.md Section 6.1).
 type Job struct {
 	ID                   string
@@ -64,6 +69,7 @@ type Task struct {
 	ScheduledAt    *time.Time
 	StartedAt      *time.Time
 	FinishedAt     *time.Time
+	NextRetryAt    *time.Time
 }
 
 // TaskWithJob is a Task plus the fields from its parent Job that the
@@ -195,7 +201,7 @@ func (s *Store) ListJobs(ctx context.Context) ([]Job, error) {
 func (s *Store) GetTask(ctx context.Context, id string) (*Task, error) {
 	const q = `
 		SELECT id, job_id, status, assigned_node_id, assigned_epoch, retries_used, exit_code, last_error,
-		       created_at, scheduled_at, started_at, finished_at
+		       created_at, scheduled_at, started_at, finished_at, next_retry_at
 		FROM tasks WHERE id = $1
 	`
 	task, err := scanTask(s.pool.QueryRow(ctx, q, id))
@@ -217,12 +223,12 @@ func (s *Store) ListTasks(ctx context.Context, jobID string) ([]Task, error) {
 	if jobID == "" {
 		rows, err = s.pool.Query(ctx, `
 			SELECT id, job_id, status, assigned_node_id, assigned_epoch, retries_used, exit_code, last_error,
-			       created_at, scheduled_at, started_at, finished_at
+			       created_at, scheduled_at, started_at, finished_at, next_retry_at
 			FROM tasks ORDER BY created_at ASC`)
 	} else {
 		rows, err = s.pool.Query(ctx, `
 			SELECT id, job_id, status, assigned_node_id, assigned_epoch, retries_used, exit_code, last_error,
-			       created_at, scheduled_at, started_at, finished_at
+			       created_at, scheduled_at, started_at, finished_at, next_retry_at
 			FROM tasks WHERE job_id = $1 ORDER BY created_at ASC`, jobID)
 	}
 	if err != nil {
@@ -254,11 +260,12 @@ func (s *Store) ClaimPendingTasksForScheduling(ctx context.Context, limit int) (
 
 	const q = `
 		SELECT t.id, t.job_id, t.status, t.assigned_node_id, t.assigned_epoch, t.retries_used, t.exit_code, t.last_error,
-		       t.created_at, t.scheduled_at, t.started_at, t.finished_at,
+		       t.created_at, t.scheduled_at, t.started_at, t.finished_at, t.next_retry_at,
 		       j.image, j.command, j.cpu_request_mc, j.mem_request_mb, j.retry_limit, j.scheduling_policy, j.constraints
 		FROM tasks t
 		JOIN jobs j ON j.id = t.job_id
 		WHERE t.status = $1
+		  AND (t.next_retry_at IS NULL OR t.next_retry_at <= now())
 		ORDER BY t.created_at ASC
 		FOR UPDATE OF t SKIP LOCKED
 		LIMIT $2
@@ -369,7 +376,7 @@ func (s *Store) GetNodeAllocations(ctx context.Context) (map[string]NodeAllocati
 func (s *Store) ListScheduledTasksForNode(ctx context.Context, nodeID string) ([]TaskWithJob, error) {
 	const q = `
 		SELECT t.id, t.job_id, t.status, t.assigned_node_id, t.assigned_epoch, t.retries_used, t.exit_code, t.last_error,
-		       t.created_at, t.scheduled_at, t.started_at, t.finished_at,
+		       t.created_at, t.scheduled_at, t.started_at, t.finished_at, t.next_retry_at,
 		       j.image, j.command, j.cpu_request_mc, j.mem_request_mb, j.retry_limit, j.scheduling_policy, j.constraints
 		FROM tasks t
 		JOIN jobs j ON j.id = t.job_id
@@ -399,12 +406,19 @@ type UpdateTaskStatusParams struct {
 	Status   string // running|succeeded|failed
 	ExitCode *int32
 	Error    string
+	// Optional fencing fields from the reporting worker (Phase 5). When set,
+	// the update is rejected with ErrStaleTaskReport if they don't match the
+	// task's current assignment.
+	NodeID string
+	Epoch  int64
 }
 
 // UpdateTaskStatus transitions a task based on a worker status report.
 // Only legal worker-driven transitions are accepted (scheduled/running ->
 // running/succeeded/failed). Terminal statuses are idempotent no-ops so a
-// duplicated report after a reconnect doesn't error.
+// duplicated report after a reconnect doesn't error. A failed task whose
+// retries_used is still below the job's retry_limit is requeued as pending
+// with exponential backoff (IMPLEMENTATION_PLAN.md Phase 5).
 func (s *Store) UpdateTaskStatus(ctx context.Context, params UpdateTaskStatusParams) (*Task, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -414,13 +428,17 @@ func (s *Store) UpdateTaskStatus(ctx context.Context, params UpdateTaskStatusPar
 
 	task, err := scanTask(tx.QueryRow(ctx, `
 		SELECT id, job_id, status, assigned_node_id, assigned_epoch, retries_used, exit_code, last_error,
-		       created_at, scheduled_at, started_at, finished_at
+		       created_at, scheduled_at, started_at, finished_at, next_retry_at
 		FROM tasks WHERE id = $1 FOR UPDATE`, params.TaskID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrTaskNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("store: update task status: %w", err)
+	}
+
+	if err := checkTaskReportFence(task, params.NodeID, params.Epoch); err != nil {
+		return nil, err
 	}
 
 	// Idempotent: already in the requested terminal state.
@@ -437,10 +455,10 @@ func (s *Store) UpdateTaskStatus(ctx context.Context, params UpdateTaskStatusPar
 			return nil, fmt.Errorf("store: cannot transition task from %s to running", task.Status)
 		}
 		updated, err := scanTask(tx.QueryRow(ctx, `
-			UPDATE tasks SET status = $2, started_at = COALESCE(started_at, now())
+			UPDATE tasks SET status = $2, started_at = COALESCE(started_at, now()), next_retry_at = NULL
 			WHERE id = $1
 			RETURNING id, job_id, status, assigned_node_id, assigned_epoch, retries_used, exit_code, last_error,
-			          created_at, scheduled_at, started_at, finished_at`,
+			          created_at, scheduled_at, started_at, finished_at, next_retry_at`,
 			params.TaskID, TaskStatusRunning))
 		if err != nil {
 			return nil, fmt.Errorf("store: mark task running: %w", err)
@@ -463,6 +481,17 @@ func (s *Store) UpdateTaskStatus(ctx context.Context, params UpdateTaskStatusPar
 		if params.Error != "" {
 			lastError = &params.Error
 		}
+
+		if params.Status == TaskStatusFailed {
+			var retryLimit int32
+			if err := tx.QueryRow(ctx, `SELECT retry_limit FROM jobs WHERE id = $1`, task.JobID).Scan(&retryLimit); err != nil {
+				return nil, fmt.Errorf("store: load retry_limit: %w", err)
+			}
+			if task.RetriesUsed < retryLimit {
+				return requeueFailedTask(ctx, tx, task, params.ExitCode, lastError)
+			}
+		}
+
 		eventType := EventTypeTaskSucceeded
 		if params.Status == TaskStatusFailed {
 			eventType = EventTypeTaskFailed
@@ -470,10 +499,10 @@ func (s *Store) UpdateTaskStatus(ctx context.Context, params UpdateTaskStatusPar
 		updated, err := scanTask(tx.QueryRow(ctx, `
 			UPDATE tasks
 			SET status = $2, exit_code = $3, last_error = $4, finished_at = now(),
-			    started_at = COALESCE(started_at, now())
+			    started_at = COALESCE(started_at, now()), next_retry_at = NULL
 			WHERE id = $1
 			RETURNING id, job_id, status, assigned_node_id, assigned_epoch, retries_used, exit_code, last_error,
-			          created_at, scheduled_at, started_at, finished_at`,
+			          created_at, scheduled_at, started_at, finished_at, next_retry_at`,
 			params.TaskID, params.Status, params.ExitCode, lastError))
 		if err != nil {
 			return nil, fmt.Errorf("store: mark task terminal: %w", err)
@@ -493,6 +522,59 @@ func (s *Store) UpdateTaskStatus(ctx context.Context, params UpdateTaskStatusPar
 	default:
 		return nil, fmt.Errorf("store: unsupported task status update %q", params.Status)
 	}
+}
+
+func checkTaskReportFence(task *Task, nodeID string, epoch int64) error {
+	if nodeID == "" {
+		// Older callers / tests without fencing fields — keep permissive.
+		return nil
+	}
+	if task.AssignedNodeID == nil || *task.AssignedNodeID != nodeID {
+		return ErrStaleTaskReport
+	}
+	if task.AssignedEpoch == nil || *task.AssignedEpoch != epoch {
+		return ErrStaleTaskReport
+	}
+	return nil
+}
+
+func requeueFailedTask(ctx context.Context, tx pgx.Tx, task *Task, exitCode *int32, lastError *string) (*Task, error) {
+	retries := task.RetriesUsed + 1
+	backoff := retryBackoff(retries)
+	updated, err := scanTask(tx.QueryRow(ctx, `
+		UPDATE tasks
+		SET status = $2, retries_used = $3, exit_code = $4, last_error = $5,
+		    assigned_node_id = NULL, assigned_epoch = NULL,
+		    scheduled_at = NULL, started_at = NULL, finished_at = NULL,
+		next_retry_at = now() + ($6 * interval '1 second')
+		WHERE id = $1
+		RETURNING id, job_id, status, assigned_node_id, assigned_epoch, retries_used, exit_code, last_error,
+		          created_at, scheduled_at, started_at, finished_at, next_retry_at`,
+		task.ID, TaskStatusPending, retries, exitCode, lastError, backoff.Seconds()))
+	if err != nil {
+		return nil, fmt.Errorf("store: requeue failed task: %w", err)
+	}
+	msg := fmt.Sprintf("task failed; retry %d scheduled after %s", retries, backoff)
+	if err := insertEvent(ctx, tx, EntityTypeTask, task.ID, EventTypeTaskRetryScheduled, msg); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+// retryBackoff returns exponential backoff for the Nth retry attempt
+// (retriesUsed after increment): 500ms, 1s, 2s, 4s, … capped at 16s.
+func retryBackoff(retriesUsed int32) time.Duration {
+	shift := retriesUsed - 1
+	if shift < 0 {
+		shift = 0
+	}
+	if shift > 5 {
+		shift = 5
+	}
+	return time.Duration(500*(1<<shift)) * time.Millisecond
 }
 
 func scanJob(row rowScanner) (*Job, error) {
@@ -518,6 +600,7 @@ func scanTask(row rowScanner) (*Task, error) {
 	if err := row.Scan(
 		&t.ID, &t.JobID, &t.Status, &t.AssignedNodeID, &t.AssignedEpoch, &t.RetriesUsed,
 		&t.ExitCode, &t.LastError, &t.CreatedAt, &t.ScheduledAt, &t.StartedAt, &t.FinishedAt,
+		&t.NextRetryAt,
 	); err != nil {
 		return nil, err
 	}
@@ -530,6 +613,7 @@ func scanTaskWithJob(row rowScanner) (*TaskWithJob, error) {
 	if err := row.Scan(
 		&twj.ID, &twj.JobID, &twj.Status, &twj.AssignedNodeID, &twj.AssignedEpoch, &twj.RetriesUsed,
 		&twj.ExitCode, &twj.LastError, &twj.CreatedAt, &twj.ScheduledAt, &twj.StartedAt, &twj.FinishedAt,
+		&twj.NextRetryAt,
 		&twj.Image, &twj.Command, &twj.CPURequestMillicores, &twj.MemRequestMB, &twj.RetryLimit, &twj.SchedulingPolicy,
 		&constraintsRaw,
 	); err != nil {

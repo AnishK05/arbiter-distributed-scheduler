@@ -35,6 +35,8 @@ func (s *Server) applyTaskStatusUpdate(ctx context.Context, req *arbiterv1.TaskS
 		TaskID: req.GetTaskId(),
 		Status: req.GetStatus(),
 		Error:  req.GetError(),
+		NodeID: req.GetNodeId(),
+		Epoch:  req.GetEpoch(),
 	}
 	if req.GetStatus() == store.TaskStatusSucceeded || req.GetStatus() == store.TaskStatusFailed {
 		code := req.GetExitCode()
@@ -44,6 +46,9 @@ func (s *Server) applyTaskStatusUpdate(ctx context.Context, req *arbiterv1.TaskS
 	_, err := s.store.UpdateTaskStatus(ctx, params)
 	if errors.Is(err, store.ErrTaskNotFound) {
 		return status.Error(codes.NotFound, "task not found")
+	}
+	if errors.Is(err, store.ErrStaleTaskReport) {
+		return status.Error(codes.FailedPrecondition, "stale task status report (epoch/node mismatch); fencing rejected update")
 	}
 	if err != nil {
 		return status.Errorf(codes.Internal, "update task status: %v", err)

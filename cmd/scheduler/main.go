@@ -19,6 +19,7 @@ import (
 	arbiterv1 "github.com/AnishK05/arbiter-distributed-scheduler/gen/arbiter/v1"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/buildinfo"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/cache"
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/dockerutil"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/failuredetector"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/grpcapi"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/health"
@@ -84,7 +85,7 @@ func main() {
 		"not_ready_after", detectorCfg.NotReadyAfter,
 		"dead_after", detectorCfg.DeadAfter,
 	)
-	detector := failuredetector.New(db, rdb, logger, detectorCfg)
+	detector := failuredetector.NewWithDocker(db, rdb, dockerutil.New(), logger, detectorCfg)
 	go detector.Run(ctx)
 
 	sched := scheduler.New(db, logger)

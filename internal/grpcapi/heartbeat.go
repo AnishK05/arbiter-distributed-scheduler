@@ -19,9 +19,8 @@ import (
 //  2. Compares epochs. A mismatch means this node was declared dead (its
 //     epoch was bumped by MarkNodeDead) since this process last registered
 //     — e.g. it was on the wrong side of a network partition. It gets
-//     epoch_invalid=true and nothing else happens; the worker is expected to
-//     kill any local state and re-register (full fencing of running tasks
-//     lands in Phase 5).
+//     epoch_invalid=true and nothing else happens; the worker must kill any
+//     local containers and re-register (IMPLEMENTATION_PLAN.md Section 6.5).
 //  3. On a matching epoch, records liveness in Redis, applies any bundled
 //     task status updates, recovers not_ready → ready if needed, and returns
 //     any tasks newly scheduled onto this node as assignments.
