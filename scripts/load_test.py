@@ -14,15 +14,16 @@ Usage (from repo root):
     make phase4-up
     make build
 
-    python3 scripts/load_test.py --replicas 100 --cpu-millicores 100 \\
+    python3 scripts/load_test.py --replicas 100 --cpu-millicores 50 \\
         --policy bin_pack --command 60
 
-    python3 scripts/load_test.py --replicas 100 --cpu-millicores 100 \\
+    python3 scripts/load_test.py --replicas 100 --cpu-millicores 50 \\
         --policy spread --command 60
 
-With 5×2000m nodes and 100×100m tasks held running (`--command 60` sleeps
-60s), bin-pack should concentrate onto fewer nodes near-full while spread
-should land ~20 tasks on each node.
+With 5×2000m nodes and 100×50m tasks held running (`--command 60` sleeps
+60s so capacity stays reserved), bin-pack should concentrate onto fewer
+near-full nodes (e.g. 40/40/20/0/0) while spread should land ~20 tasks on
+each node.
 """
 
 from __future__ import annotations
@@ -91,6 +92,22 @@ def submit_job(args: argparse.Namespace) -> str:
     if start < 0 or end < 0:
         raise RuntimeError(f"could not parse job id from: {out!r}")
     return out[start + 1 : end]
+
+
+def wait_until_idle(timeout_s: float) -> None:
+    """Block until no scheduled/running tasks hold capacity."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        inflight = int(
+            psql(
+                "SELECT COUNT(*) FROM tasks WHERE status IN ('scheduled', 'running');"
+            )
+            or "0"
+        )
+        if inflight == 0:
+            return
+        time.sleep(0.5)
+    raise TimeoutError(f"cluster still has inflight tasks after {timeout_s}s")
 
 
 def wait_until_assigned(job_id: str, timeout_s: float) -> None:
@@ -166,11 +183,20 @@ def main() -> int:
         help="container CMD override (default 60 → sleep_n.py sleeps 60s so capacity stays reserved)",
     )
     parser.add_argument("--wait-timeout-s", type=float, default=60.0)
+    parser.add_argument(
+        "--idle-timeout-s",
+        type=float,
+        default=120.0,
+        help="max time to wait for prior scheduled/running tasks to finish before submitting",
+    )
     args = parser.parse_args()
 
     if args.replicas < 1:
         print("--replicas must be >= 1", file=sys.stderr)
         return 2
+
+    print("waiting for cluster idle (no scheduled/running tasks)...")
+    wait_until_idle(args.idle_timeout_s)
 
     job_id = submit_job(args)
     wait_until_assigned(job_id, args.wait_timeout_s)
