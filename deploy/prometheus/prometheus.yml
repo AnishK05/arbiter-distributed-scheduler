@@ -3,6 +3,8 @@ global:
   evaluation_interval: 5s
 
 scrape_configs:
+  # Targets match make phase7-up (base + phase6 HA + prometheus/grafana).
+  # Missing optional workers from other overlays appear as down; that is fine.
   - job_name: arbiter-scheduler
     metrics_path: /metrics
     static_configs:
@@ -18,9 +20,5 @@ scrape_configs:
     static_configs:
       - targets:
           - worker:8081
-          - worker-2:8082
-          - worker-3:8083
-          - worker-4:8084
-          - worker-5:8085
         labels:
           component: worker
