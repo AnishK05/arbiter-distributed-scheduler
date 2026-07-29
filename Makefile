@@ -66,6 +66,14 @@ up: ## Start the local dev stack (Postgres + Redis + 1 scheduler + 1 worker) in 
 down: ## Stop the local dev stack
 	docker compose -f deploy/docker-compose.yml down
 
+.PHONY: phase4-up
+phase4-up: ## Start the Phase 4 stack (dev stack + 5 equal-capacity workers)
+	docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.phase4.yml up -d --build
+
+.PHONY: phase4-down
+phase4-down: ## Stop the Phase 4 stack
+	docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.phase4.yml down
+
 .PHONY: demo-up
 demo-up: ## Start the full demo cluster (schedulers, 10 workers, pg, redis, prometheus, grafana, dashboard)
 	docker compose -f deploy/docker-compose.demo.yml up --build

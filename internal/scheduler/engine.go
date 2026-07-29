@@ -1,7 +1,7 @@
-// Package scheduler implements Arbiter's placement engine. Phase 3 ships a
-// naive first-fit loop (first ready node with enough free CPU/memory);
-// Phase 4 replaces the placement decision with pluggable Filter/Scorer
-// plugins (bin-pack / spread) without changing the claim/assign plumbing.
+// Package scheduler implements Arbiter's placement engine. Phase 4 replaces
+// Phase 3's naive first-fit with a pluggable Filter → Score pipeline
+// (bin-pack / spread), selected per job via scheduling_policy
+// (IMPLEMENTATION_PLAN.md Section 6.3).
 package scheduler
 
 import (
@@ -25,6 +25,7 @@ type Engine struct {
 
 	pollInterval time.Duration
 	claimLimit   int
+	filters      []Filter
 }
 
 // New constructs an Engine. logger may be nil (discard).
@@ -37,6 +38,7 @@ func New(s *store.Store, logger *slog.Logger) *Engine {
 		logger:       logger,
 		pollInterval: defaultPollInterval,
 		claimLimit:   defaultClaimLimit,
+		filters:      DefaultFilters(),
 	}
 }
 
@@ -57,9 +59,7 @@ func (e *Engine) Run(ctx context.Context) {
 	}
 }
 
-// tick claims a batch of pending tasks and places each with first-fit.
-// Exported for tests via the unexported method being callable from the
-// same package's _test.go; external packages use Run.
+// tick claims a batch of pending tasks and places each via Filter → Score.
 func (e *Engine) tick(ctx context.Context) error {
 	tx, tasks, err := e.store.ClaimPendingTasksForScheduling(ctx, e.claimLimit)
 	if err != nil {
@@ -89,7 +89,8 @@ func (e *Engine) tick(ctx context.Context) error {
 
 	placed := 0
 	for _, task := range tasks {
-		node := firstFit(nodes, pendingAlloc, task.CPURequestMillicores, task.MemRequestMB)
+		scorer := ScorerForPolicy(task.SchedulingPolicy)
+		node := Place(nodes, pendingAlloc, task, e.filters, scorer)
 		if node == nil {
 			continue // leave pending; free capacity may appear next tick
 		}
@@ -106,6 +107,7 @@ func (e *Engine) tick(ctx context.Context) error {
 			"job_id", task.JobID,
 			"node_id", node.ID,
 			"node_hostname", node.Hostname,
+			"policy", scorer.Name(),
 			"cpu_mc", task.CPURequestMillicores,
 			"mem_mb", task.MemRequestMB,
 		)
@@ -116,24 +118,6 @@ func (e *Engine) tick(ctx context.Context) error {
 	}
 	if placed > 0 {
 		e.logger.Info("scheduling tick complete", "claimed", len(tasks), "placed", placed)
-	}
-	return nil
-}
-
-// firstFit returns the first ready node with enough residual capacity, or
-// nil if none fit. Phase 4 replaces this with Filter → Score ranking.
-func firstFit(nodes []store.Node, allocs map[string]store.NodeAllocation, cpuNeed, memNeed int64) *store.Node {
-	for i := range nodes {
-		n := &nodes[i]
-		if n.Status != store.NodeStatusReady {
-			continue
-		}
-		alloc := allocs[n.ID]
-		freeCPU := n.CPUCapacityMillicores - alloc.CPUMillicores
-		freeMem := n.MemCapacityMB - alloc.MemoryMB
-		if freeCPU >= cpuNeed && freeMem >= memNeed {
-			return n
-		}
 	}
 	return nil
 }
