@@ -1,2 +1,2 @@
-Grafana dashboard provisioning JSON, added in Phase 7 (cluster overview, task throughput, failover
-events timeline).
+Grafana dashboard provisioning (Phase 7): datasources + JSON dashboards for
+cluster overview, task throughput, and failover events.

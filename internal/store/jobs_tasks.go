@@ -214,6 +214,26 @@ func (s *Store) GetTask(ctx context.Context, id string) (*Task, error) {
 	return task, nil
 }
 
+// CountTasksByStatus returns a status → count map for all tasks.
+func (s *Store) CountTasksByStatus(ctx context.Context) (map[string]int64, error) {
+	rows, err := s.pool.Query(ctx, `SELECT status, COUNT(*) FROM tasks GROUP BY status`)
+	if err != nil {
+		return nil, fmt.Errorf("store: count tasks by status: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[string]int64{}
+	for rows.Next() {
+		var status string
+		var n int64
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, fmt.Errorf("store: scan task count: %w", err)
+		}
+		out[status] = n
+	}
+	return out, rows.Err()
+}
+
 // ListTasks returns tasks, optionally filtered by job ID.
 func (s *Store) ListTasks(ctx context.Context, jobID string) ([]Task, error) {
 	var (

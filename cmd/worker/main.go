@@ -23,6 +23,7 @@ import (
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/executor"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/health"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/leaderclient"
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/metrics"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -43,11 +44,12 @@ func main() {
 	address := flag.String("address", "", "address this node advertises to the scheduler (defaults to '<hostname><http-addr>')")
 	cpuCapacityMillicores := flag.Int64("cpu-capacity-millicores", 1000, "simulated CPU capacity for this node, in millicores")
 	memCapacityMB := flag.Int64("mem-capacity-mb", 512, "simulated memory capacity for this node, in megabytes")
-	httpAddr := flag.String("http-addr", ":8081", "address for the HTTP server (/healthz, later /metrics)")
+	httpAddr := flag.String("http-addr", ":8081", "address for the HTTP server (/healthz, /metrics)")
 	labelsFlag := flag.String("labels", "", "comma-separated node labels as key=value pairs (e.g. zone=a,gpu=true)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	met := metrics.New()
 
 	labels, err := parseLabels(*labelsFlag)
 	if err != nil {
@@ -94,9 +96,10 @@ func main() {
 	defer dialer.Close()
 
 	agent := &workerAgent{
-		logger: logger,
-		dialer: dialer,
-		specs:  make(map[string]executor.TaskSpec),
+		logger:  logger,
+		dialer:  dialer,
+		metrics: met,
+		specs:   make(map[string]executor.TaskSpec),
 	}
 
 	exec, err := executor.New(agent.handleTaskDone)
@@ -132,7 +135,7 @@ func main() {
 
 	httpServer := &http.Server{
 		Addr:              *httpAddr,
-		Handler:           health.Handler(),
+		Handler:           health.Mux(met.Handler()),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -258,9 +261,10 @@ func (d *schedulerDialer) Close() {
 }
 
 type workerAgent struct {
-	logger *slog.Logger
-	dialer *schedulerDialer
-	exec   *executor.Executor
+	logger  *slog.Logger
+	dialer  *schedulerDialer
+	metrics *metrics.Registry
+	exec    *executor.Executor
 
 	mu     sync.Mutex
 	specs  map[string]executor.TaskSpec
@@ -285,6 +289,10 @@ func (a *workerAgent) handleTaskDone(result executor.Result) {
 	a.mu.Lock()
 	delete(a.specs, result.TaskID)
 	a.mu.Unlock()
+	if a.metrics != nil {
+		a.metrics.WorkerTasksRunning.Dec()
+		a.metrics.ObserveTaskStatus(result.Status)
+	}
 
 	a.logger.Info("task finished",
 		"task_id", result.TaskID,
@@ -456,6 +464,13 @@ func (a *workerAgent) startAssignedTask(spec executor.TaskSpec) {
 
 	if err := a.exec.Start(context.Background(), spec); err != nil {
 		a.logger.Error("failed to start task container", "task_id", spec.TaskID, "error", err)
+		if a.metrics != nil {
+			a.metrics.ObserveTaskStatus("failed")
+		}
+		return
+	}
+	if a.metrics != nil {
+		a.metrics.WorkerTasksRunning.Inc()
 	}
 }
 

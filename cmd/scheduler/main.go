@@ -1,8 +1,7 @@
-// Command scheduler is the Arbiter control-plane binary. As of Phase 6 it
-// elects a leader via a Postgres lease, serves ClusterControl + SchedulerAPI
-// RPCs (followers reject mutating calls with NOT_LEADER), runs the failure
-// detector and scheduling loop only while leading, and reaps orphan DooD
-// containers on node death.
+// Command scheduler is the Arbiter control-plane binary. As of Phase 7 it
+// exposes Prometheus /metrics alongside /healthz, elects a leader via a
+// Postgres lease, serves ClusterControl + SchedulerAPI RPCs, and runs the
+// failure detector + scheduling loop only while leading.
 package main
 
 import (
@@ -26,6 +25,7 @@ import (
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/failuredetector"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/grpcapi"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/health"
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/metrics"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/scheduler"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/store"
 
@@ -42,7 +42,7 @@ const (
 
 func main() {
 	grpcAddr := flag.String("grpc-addr", ":7000", "address for the gRPC server (ClusterControl + SchedulerAPI)")
-	httpAddr := flag.String("http-addr", ":8080", "address for the HTTP server (/healthz, later /metrics)")
+	httpAddr := flag.String("http-addr", ":8080", "address for the HTTP server (/healthz, /metrics)")
 	postgresURL := flag.String("postgres-url", envOr("ARBITER_POSTGRES_URL", "postgres://arbiter:arbiter@localhost:5432/arbiter?sslmode=disable"), "PostgreSQL connection string")
 	migrationsPath := flag.String("migrations-path", "migrations", "filesystem path to the SQL migrations directory")
 	redisAddr := flag.String("redis-addr", envOr("ARBITER_REDIS_ADDR", "localhost:6379"), "Redis address (host:port or redis:// URL)")
@@ -54,6 +54,7 @@ func main() {
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	met := metrics.New()
 
 	resolvedReplicaID := *replicaID
 	if resolvedReplicaID == "" {
@@ -112,7 +113,7 @@ func main() {
 		AdvertiseAddr: resolvedAdvertise,
 		LeaseTTL:      *leaseTTL,
 		RenewInterval: *leaseRenew,
-	})
+	}, met)
 	elector.Bootstrap(ctx)
 	go elector.Run(ctx)
 	logger.Info("leader election loop started",
@@ -128,15 +129,17 @@ func main() {
 		"not_ready_after", detectorCfg.NotReadyAfter,
 		"dead_after", detectorCfg.DeadAfter,
 	)
-	detector := failuredetector.NewWithDocker(db, rdb, dockerutil.New(), logger, detectorCfg, elector)
+	detector := failuredetector.NewWithDocker(db, rdb, dockerutil.New(), logger, detectorCfg, elector, met)
 	go detector.Run(ctx)
 
-	sched := scheduler.New(db, logger, elector)
+	sched := scheduler.New(db, logger, elector, met)
 	go sched.Run(ctx)
 	logger.Info("scheduling loop started", "policy", "filter_score")
 
+	go met.RunClusterGauges(ctx, logger, db, elector, time.Second)
+
 	grpcServer := grpc.NewServer()
-	server := grpcapi.New(db, rdb, int32(*heartbeatIntervalMS), elector)
+	server := grpcapi.New(db, rdb, int32(*heartbeatIntervalMS), elector, met)
 	arbiterv1.RegisterClusterControlServer(grpcServer, server)
 	arbiterv1.RegisterSchedulerAPIServer(grpcServer, server)
 	reflection.Register(grpcServer)
@@ -156,7 +159,7 @@ func main() {
 
 	httpServer := &http.Server{
 		Addr:              *httpAddr,
-		Handler:           health.Handler(),
+		Handler:           health.Mux(met.Handler()),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

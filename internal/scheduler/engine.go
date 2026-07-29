@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/metrics"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/store"
 )
 
@@ -26,17 +27,18 @@ type LeaderGate interface {
 
 // Engine runs the background scheduling loop.
 type Engine struct {
-	store  *store.Store
-	logger *slog.Logger
-	leader LeaderGate
+	store   *store.Store
+	logger  *slog.Logger
+	leader  LeaderGate
+	metrics *metrics.Registry
 
 	pollInterval time.Duration
 	claimLimit   int
 	filters      []Filter
 }
 
-// New constructs an Engine. logger and leader may be nil (discard / always-leader).
-func New(s *store.Store, logger *slog.Logger, leader LeaderGate) *Engine {
+// New constructs an Engine. logger, leader, and met may be nil.
+func New(s *store.Store, logger *slog.Logger, leader LeaderGate, met *metrics.Registry) *Engine {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -44,6 +46,7 @@ func New(s *store.Store, logger *slog.Logger, leader LeaderGate) *Engine {
 		store:        s,
 		logger:       logger,
 		leader:       leader,
+		metrics:      met,
 		pollInterval: defaultPollInterval,
 		claimLimit:   defaultClaimLimit,
 		filters:      DefaultFilters(),
@@ -114,6 +117,10 @@ func (e *Engine) tick(ctx context.Context) error {
 		a.MemoryMB += task.MemRequestMB
 		pendingAlloc[node.ID] = a
 		placed++
+		if e.metrics != nil {
+			e.metrics.ObserveTaskStatus(store.TaskStatusScheduled)
+			e.metrics.SchedulingLatency.Observe(time.Since(task.CreatedAt).Seconds())
+		}
 		e.logger.Info("task scheduled",
 			"task_id", task.ID,
 			"job_id", task.JobID,

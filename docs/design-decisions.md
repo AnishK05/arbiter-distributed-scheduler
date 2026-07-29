@@ -162,3 +162,19 @@ here whenever a phase's plan says "pick one, document the choice" or similar.
   container → poll `leader_lease` for a new holder → submit a probe job to the new leader). Target:
   election within lease TTL + one renew interval (~6s). See
   `docs/benchmarks/phase6-leader-failover.md`.
+
+## Phase 7
+
+- **Prometheus client is `client_golang` v1.20.5** (pinned for Go 1.22.2; avoids newer client
+  releases that raise the minimum Go version). Collectors live in `internal/metrics` on a private
+  registry (not the global default) so tests can instantiate safely.
+- **Cluster gauges refresh from Postgres on the leader only** (~1s): `queue_depth`, `tasks_running`,
+  `nodes_total{status}`, and per-node CPU/memory capacity vs allocation. Followers still expose
+  process metrics and `arbiter_is_leader=0`. Counters/histograms (`tasks_total`, scheduling latency,
+  heartbeat misses, failover seconds, leader elections) are updated inline at the call sites.
+- **`arbiter_failover_seconds` is node-death detection latency** (last-seen age when marked dead),
+  not leader-election time — election is covered by `arbiter_leader_elections_total` +
+  `arbiter_is_leader` flips. This matches the resume "sub-3s heartbeat failover" signal.
+- **Phase 7 compose overlay** (`make phase7-up`) stacks Phase 6 HA + Prometheus (:9090) + Grafana
+  (:3000, admin/admin, anonymous Viewer). Provisioned dashboards: Cluster Overview, Task Throughput,
+  Failover Events. See `docs/benchmarks/phase7-observability.md`.

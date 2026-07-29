@@ -10,7 +10,7 @@ leader election, fencing/fault-tolerance design, gRPC API, milestones, and bench
 lives in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). A quick-reference architecture summary
 with diagrams is in [`docs/architecture.md`](docs/architecture.md).
 
-**Status:** Phase 6 (control-plane HA / Postgres-lease leader election) — see
+**Status:** Phase 7 (Prometheus metrics + Grafana dashboards) — see
 [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) Section 8 for the full milestone list.
 
 ## Tech Stack
@@ -75,6 +75,11 @@ python3 scripts/chaos_monkey.py --duration-s 40 --interval-s 5
 # Phase 6: 3 scheduler replicas; kill the leader and measure election time
 make phase6-up
 python3 scripts/measure_leader_failover.py --trials 5 --submit-after
+
+# Phase 7: HA stack + Prometheus/Grafana (http://localhost:3000, admin/admin)
+make phase7-up
+./bin/arbiterctl submit load --replicas 20 --cpu-millicores 50 --memory-mb 32 --command 30
+# Open Grafana → Arbiter → Cluster Overview / Failover Events
 
 # Tear down
 make down

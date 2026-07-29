@@ -1,0 +1,92 @@
+{
+  "uid": "arbiter-failover",
+  "title": "Arbiter Failover Events",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "tags": ["arbiter", "failover"],
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Leader Elections (rate)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(arbiter_leader_elections_total[1m]))",
+          "legendFormat": "elections/s",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Which Replica Is Leader",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "arbiter_is_leader",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Heartbeat Misses",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(arbiter_heartbeat_misses_total[1m]))",
+          "legendFormat": "misses/s",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase(arbiter_heartbeat_misses_total[5m]))",
+          "legendFormat": "misses (5m increase)",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Node Failover Detection Latency",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "description": "Observed last-seen age when a node is marked dead (arbiter_failover_seconds).",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(arbiter_failover_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(arbiter_failover_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(arbiter_failover_seconds_count[1m]))",
+          "legendFormat": "dead transitions/s",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Dead / Not-Ready Nodes During Failover",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "targets": [
+        { "expr": "max(arbiter_nodes_total{status=\"dead\"})", "legendFormat": "dead", "refId": "A" },
+        { "expr": "max(arbiter_nodes_total{status=\"not_ready\"})", "legendFormat": "not_ready", "refId": "B" },
+        { "expr": "max(arbiter_nodes_total{status=\"ready\"})", "legendFormat": "ready", "refId": "C" }
+      ]
+    }
+  ]
+}

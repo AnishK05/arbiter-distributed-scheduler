@@ -82,6 +82,14 @@ phase6-up: ## Start the Phase 6 HA stack (3 scheduler replicas + 1 worker)
 phase6-down: ## Stop the Phase 6 HA stack
 	docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.phase6.yml down
 
+.PHONY: phase7-up
+phase7-up: ## Start Phase 6 HA + Prometheus/Grafana (observability DoD)
+	docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.phase6.yml -f deploy/docker-compose.phase7.yml up -d --build
+
+.PHONY: phase7-down
+phase7-down: ## Stop the Phase 7 observability stack
+	docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.phase6.yml -f deploy/docker-compose.phase7.yml down
+
 .PHONY: demo-up
 demo-up: ## Start the full demo cluster (schedulers, 10 workers, pg, redis, prometheus, grafana, dashboard)
 	docker compose -f deploy/docker-compose.demo.yml up --build

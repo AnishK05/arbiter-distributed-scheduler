@@ -55,7 +55,7 @@ func TestSubmitJobValidation(t *testing.T) {
 		},
 	}
 
-	s := New(nil, nil, 500, nil)
+	s := New(nil, nil, 500, nil, nil)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := s.SubmitJob(context.Background(), tt.req)
@@ -70,7 +70,7 @@ func TestSubmitJobValidation(t *testing.T) {
 }
 
 func TestReportTaskStatusValidation(t *testing.T) {
-	s := New(nil, nil, 500, nil)
+	s := New(nil, nil, 500, nil, nil)
 	_, err := s.ReportTaskStatus(context.Background(), &arbiterv1.TaskStatusUpdate{
 		Status: "running",
 	})

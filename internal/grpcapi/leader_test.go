@@ -20,7 +20,7 @@ func (s staticLeader) IsLeader() bool     { return s.leader }
 func (s staticLeader) LeaderAddr() string { return s.addr }
 
 func TestRequireLeaderRejectsFollower(t *testing.T) {
-	s := New(nil, nil, 500, staticLeader{leader: false, addr: "leader:7000"})
+	s := New(nil, nil, 500, staticLeader{leader: false, addr: "leader:7000"}, nil)
 	_, err := s.SubmitJob(context.Background(), &arbiterv1.SubmitJobRequest{
 		Name:    "j",
 		Image:   "img",
@@ -41,7 +41,7 @@ func TestRequireLeaderRejectsFollower(t *testing.T) {
 func TestRequireLeaderAllowsLeader(t *testing.T) {
 	// Validation still runs; missing capacity fails with InvalidArgument,
 	// proving we passed the leader gate.
-	s := New(nil, nil, 500, staticLeader{leader: true, addr: "leader:7000"})
+	s := New(nil, nil, 500, staticLeader{leader: true, addr: "leader:7000"}, nil)
 	_, err := s.RegisterNode(context.Background(), &arbiterv1.RegisterNodeRequest{
 		Hostname: "h",
 		Address:  "a",
