@@ -9,9 +9,10 @@ jobs:
   go:
     name: Go build, vet, lint, test
     runs-on: ubuntu-latest
-    # Postgres backs internal/store's integration tests (see
-    # ARBITER_TEST_POSTGRES_URL below); they skip themselves if this env var
-    # is unset, but CI always provides it so they run on every push/PR.
+    # Postgres and Redis back internal/store's and internal/cache's (and
+    # internal/failuredetector's) integration tests (see the Test step's env
+    # below); they skip themselves if these env vars are unset, but CI
+    # always provides them so the tests run on every push/PR.
     services:
       postgres:
         image: postgres:16-alpine
@@ -23,6 +24,15 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U arbiter -d arbiter"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -50,4 +60,5 @@ jobs:
       - name: Test
         env:
           ARBITER_TEST_POSTGRES_URL: postgres://arbiter:arbiter@localhost:5432/arbiter?sslmode=disable
+          ARBITER_TEST_REDIS_ADDR: localhost:6379
         run: go test ./... -race -count=1

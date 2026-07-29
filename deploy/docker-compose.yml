@@ -1,9 +1,9 @@
 # Local dev stack: Postgres + Redis, plus one scheduler replica and one
-# worker node — enough to exercise node registration end to end (Phase 1).
-# Additional scheduler replicas (leader election, Phase 6) and more workers
-# (bin-packing/chaos testing, Phase 4+) are added via a separate
-# docker-compose.demo.yml once those phases land; see
-# IMPLEMENTATION_PLAN.md Section 5 & 8.
+# worker node — enough to exercise node registration, heartbeats, and
+# failure detection end to end (Phases 1-2). Additional scheduler replicas
+# (leader election, Phase 6) and more workers (bin-packing/chaos testing,
+# Phase 4+) are added via a separate docker-compose.demo.yml once those
+# phases land; see IMPLEMENTATION_PLAN.md Section 5 & 8.
 #
 # Usage: `make up` / `make down`, or `docker compose -f deploy/docker-compose.yml up`.
 # `make run-scheduler` / `make run-worker` remain available for running
@@ -49,11 +49,14 @@ services:
     restart: unless-stopped
     environment:
       ARBITER_POSTGRES_URL: postgres://arbiter:arbiter@postgres:5432/arbiter?sslmode=disable
+      ARBITER_REDIS_ADDR: redis:6379
     ports:
       - "7000:7000"
       - "8080:8080"
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]

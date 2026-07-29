@@ -10,6 +10,7 @@ package grpcapi
 
 import (
 	arbiterv1 "github.com/AnishK05/arbiter-distributed-scheduler/gen/arbiter/v1"
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/cache"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/store"
 )
 
@@ -23,11 +24,17 @@ type Server struct {
 	arbiterv1.UnimplementedSchedulerAPIServer
 
 	store *store.Store
+	cache *cache.Client
+
+	// heartbeatIntervalMS is advertised to workers in RegisterNodeResponse.
+	// cmd/scheduler passes the same value used to derive the failure
+	// detector's missed-heartbeat thresholds, so the two stay consistent.
+	heartbeatIntervalMS int32
 }
 
-// New constructs a Server backed by the given store. Later phases will add
-// further dependencies (e.g. *cache.Client for heartbeats, the placement
-// engine, the leader-election handle) as constructor arguments.
-func New(s *store.Store) *Server {
-	return &Server{store: s}
+// New constructs a Server backed by the given store and cache. Later phases
+// will add further dependencies (the placement engine, the leader-election
+// handle) as constructor arguments.
+func New(s *store.Store, c *cache.Client, heartbeatIntervalMS int32) *Server {
+	return &Server{store: s, cache: c, heartbeatIntervalMS: heartbeatIntervalMS}
 }

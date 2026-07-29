@@ -43,3 +43,36 @@ here whenever a phase's plan says "pick one, document the choice" or similar.
   `ARBITER_TEST_POSTGRES_URL` env var (skipped if unset) rather than mocked. The store package is a
   thin wrapper around real SQL (upserts, JSONB, constraints) where a mock would mostly test the
   mock; CI provides a real `postgres:16-alpine` service container so these run on every push/PR.
+
+## Phase 2
+
+- **Node status state machine uses two thresholds derived from one flag.** `cmd/scheduler`'s single
+  `--heartbeat-interval-ms` (default 500) flag drives everything: the interval advertised to
+  workers, the failure detector's poll interval (half the heartbeat interval), the `not_ready`
+  threshold (2 missed heartbeats), and the `dead` threshold (3 missed heartbeats — 1500ms at the
+  default). Deriving all of these from one number means they can never drift out of sync with each
+  other; see `internal/failuredetector.DefaultConfig`. Measured `kill -> dead` detection time is
+  ~1450-1650ms across 5 trials, reproducible via `scripts/measure_failover.py`
+  (`docs/benchmarks/phase2-failure-detection.md`), comfortably under the 3s target with room for
+  later phases' added latency (e.g. Phase 5 reassignment).
+- **A missing/expired Redis heartbeat key is treated as "maximally stale"**, not skipped. This
+  matters for a node that registers but crashes before its first heartbeat, or if Redis itself is
+  restarted/flushed — either way, the safe default is to let the node age out and be marked dead
+  rather than being silently ignored by the detector forever. The Redis key's own TTL (5 minutes,
+  `internal/cache.lastSeenTTL`) is set far above the detection thresholds specifically so it's never
+  what triggers a dead verdict — the detector's age comparison always gets there first.
+- **`not_ready -> ready` recovery happens immediately in the `Heartbeat` handler**, not on the next
+  failure-detector poll. As soon as a heartbeat arrives from a node the detector had downgraded to
+  `not_ready` (but not yet `dead`), it's restored to `ready` right away — there's no reason to wait
+  up to a full poll interval when the proof of liveness just arrived. The `ready -> not_ready` and
+  `-> dead` directions, by contrast, can only be *detected* by the poll loop noticing an absence, so
+  they stay there.
+- **Basic epoch checking in `Heartbeat` is implemented now, ahead of full fencing enforcement
+  (Phase 5).** If a heartbeat's epoch doesn't match the node's current epoch (i.e. this node was
+  marked dead — and its epoch bumped — since this process last registered, most likely because it
+  was unreachable behind a partition), the handler returns `epoch_invalid=true` and the worker
+  re-registers. This doesn't yet need to kill any locally-running task containers, since tasks don't
+  exist until Phase 3 — that enforcement is added in Phase 5 once there's actually something to
+  fence.
+- **`github.com/redis/go-redis/v9` is pinned to `v9.6.1`**, for the same reason as the Phase 1
+  Postgres-related pins: its latest release requires a newer Go version than this project targets.
