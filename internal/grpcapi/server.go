@@ -12,6 +12,7 @@ import (
 	arbiterv1 "github.com/AnishK05/arbiter-distributed-scheduler/gen/arbiter/v1"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/cache"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/election"
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/metrics"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/store"
 )
 
@@ -38,11 +39,13 @@ type Server struct {
 	// leader is optional. When set, mutating RPCs on a follower return
 	// NOT_LEADER with the current leader's advertise address.
 	leader LeaderGate
+
+	metrics *metrics.Registry
 }
 
-// New constructs a Server. leader may be nil (treated as always-leader).
-func New(s *store.Store, c *cache.Client, heartbeatIntervalMS int32, leader LeaderGate) *Server {
-	return &Server{store: s, cache: c, heartbeatIntervalMS: heartbeatIntervalMS, leader: leader}
+// New constructs a Server. leader and met may be nil.
+func New(s *store.Store, c *cache.Client, heartbeatIntervalMS int32, leader LeaderGate, met *metrics.Registry) *Server {
+	return &Server{store: s, cache: c, heartbeatIntervalMS: heartbeatIntervalMS, leader: leader, metrics: met}
 }
 
 // requireLeader returns a FailedPrecondition error when this replica is not

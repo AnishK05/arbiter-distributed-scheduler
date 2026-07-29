@@ -56,5 +56,8 @@ func (s *Server) applyTaskStatusUpdate(ctx context.Context, req *arbiterv1.TaskS
 	if err != nil {
 		return status.Errorf(codes.Internal, "update task status: %v", err)
 	}
+	if s.metrics != nil {
+		s.metrics.ObserveTaskStatus(req.GetStatus())
+	}
 	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/metrics"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/store"
 )
 
@@ -30,9 +31,10 @@ type Config struct {
 
 // Elector runs the acquire/renew loop and exposes leadership state.
 type Elector struct {
-	store  *store.Store
-	logger *slog.Logger
-	cfg    Config
+	store   *store.Store
+	logger  *slog.Logger
+	cfg     Config
+	metrics *metrics.Registry
 
 	mu         sync.RWMutex
 	isLeader   bool
@@ -40,8 +42,8 @@ type Elector struct {
 	leaderAddr string
 }
 
-// New constructs an Elector. logger may be nil.
-func New(s *store.Store, logger *slog.Logger, cfg Config) *Elector {
+// New constructs an Elector. logger and met may be nil.
+func New(s *store.Store, logger *slog.Logger, cfg Config, met *metrics.Registry) *Elector {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -52,9 +54,10 @@ func New(s *store.Store, logger *slog.Logger, cfg Config) *Elector {
 		cfg.RenewInterval = DefaultRenewInterval
 	}
 	return &Elector{
-		store:  s,
-		logger: logger,
-		cfg:    cfg,
+		store:   s,
+		logger:  logger,
+		cfg:     cfg,
+		metrics: met,
 	}
 }
 
@@ -102,6 +105,10 @@ func (e *Elector) tick(ctx context.Context) {
 
 	switch {
 	case result.Acquired && !wasLeader:
+		if e.metrics != nil {
+			e.metrics.LeaderElectionsTotal.Inc()
+			e.metrics.IsLeader.Set(1)
+		}
 		e.logger.Info("became leader",
 			"identity", e.cfg.Identity,
 			"addr", e.cfg.AdvertiseAddr,
@@ -109,6 +116,9 @@ func (e *Elector) tick(ctx context.Context) {
 			"epoch_bumped", result.EpochBumped,
 		)
 	case !result.Acquired && wasLeader:
+		if e.metrics != nil {
+			e.metrics.IsLeader.Set(0)
+		}
 		e.logger.Warn("lost leadership",
 			"identity", e.cfg.Identity,
 			"current_leader", result.Lease.LeaderID,

@@ -19,6 +19,7 @@ import (
 
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/cache"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/dockerutil"
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/metrics"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/store"
 )
 
@@ -55,27 +56,28 @@ func DefaultConfig(heartbeatInterval time.Duration) Config {
 
 // Detector runs the polling loop described in the package doc.
 type Detector struct {
-	store  *store.Store
-	cache  *cache.Client
-	docker *dockerutil.Client
-	logger *slog.Logger
-	cfg    Config
-	leader LeaderGate
+	store   *store.Store
+	cache   *cache.Client
+	docker  *dockerutil.Client
+	logger  *slog.Logger
+	cfg     Config
+	leader  LeaderGate
+	metrics *metrics.Registry
 }
 
 // New constructs a Detector without Docker reaping (tests / hosts without a
 // socket). Prefer NewWithDocker in cmd/scheduler.
-func New(s *store.Store, c *cache.Client, logger *slog.Logger, cfg Config, leader LeaderGate) *Detector {
-	return NewWithDocker(s, c, nil, logger, cfg, leader)
+func New(s *store.Store, c *cache.Client, logger *slog.Logger, cfg Config, leader LeaderGate, met *metrics.Registry) *Detector {
+	return NewWithDocker(s, c, nil, logger, cfg, leader, met)
 }
 
 // NewWithDocker is like New but installs a Docker client used to force-remove
 // orphaned task containers after a node is marked dead.
-func NewWithDocker(s *store.Store, c *cache.Client, docker *dockerutil.Client, logger *slog.Logger, cfg Config, leader LeaderGate) *Detector {
+func NewWithDocker(s *store.Store, c *cache.Client, docker *dockerutil.Client, logger *slog.Logger, cfg Config, leader LeaderGate, met *metrics.Registry) *Detector {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Detector{store: s, cache: c, docker: docker, logger: logger, cfg: cfg, leader: leader}
+	return &Detector{store: s, cache: c, docker: docker, logger: logger, cfg: cfg, leader: leader, metrics: met}
 }
 
 // Run blocks, polling every cfg.PollInterval until ctx is cancelled.
@@ -127,6 +129,12 @@ func (d *Detector) evaluate(ctx context.Context, n store.Node) {
 			d.logger.Error("failuredetector: mark node dead", "node_id", n.ID, "error", err)
 			return
 		}
+		if d.metrics != nil {
+			d.metrics.HeartbeatMissesTotal.Inc()
+			if ok {
+				d.metrics.FailoverSeconds.Observe(age.Seconds())
+			}
+		}
 		d.logger.Warn("node marked dead",
 			"node_id", n.ID,
 			"hostname", n.Hostname,
@@ -149,6 +157,9 @@ func (d *Detector) evaluate(ctx context.Context, n store.Node) {
 		if _, err := d.store.UpdateNodeStatus(ctx, n.ID, store.NodeStatusNotReady, store.EventTypeNodeNotReady, "missed heartbeats; downgraded to not_ready"); err != nil {
 			d.logger.Error("failuredetector: mark node not_ready", "node_id", n.ID, "error", err)
 			return
+		}
+		if d.metrics != nil {
+			d.metrics.HeartbeatMissesTotal.Inc()
 		}
 		d.logger.Warn("node marked not_ready", "node_id", n.ID, "hostname", n.Hostname, "last_seen_age", age)
 	}

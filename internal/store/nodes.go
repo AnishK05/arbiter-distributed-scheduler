@@ -264,6 +264,26 @@ func (s *Store) GetNode(ctx context.Context, id string) (*Node, error) {
 	return node, nil
 }
 
+// CountNodesByStatus returns a status → count map for all nodes.
+func (s *Store) CountNodesByStatus(ctx context.Context) (map[string]int64, error) {
+	rows, err := s.pool.Query(ctx, `SELECT status, COUNT(*) FROM nodes GROUP BY status`)
+	if err != nil {
+		return nil, fmt.Errorf("store: count nodes by status: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[string]int64{}
+	for rows.Next() {
+		var status string
+		var n int64
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, fmt.Errorf("store: scan node count: %w", err)
+		}
+		out[status] = n
+	}
+	return out, rows.Err()
+}
+
 // ListNodes returns every node in the cluster, ordered by creation time.
 func (s *Store) ListNodes(ctx context.Context) ([]Node, error) {
 	const q = `

@@ -1,0 +1,50 @@
+# Phase 7 overlay: Prometheus + Grafana for Arbiter metrics dashboards.
+# Usage:
+#   make phase7-up
+#   # opens Grafana at http://localhost:3000 (admin/admin)
+#
+# Combines the Phase 6 HA stack (3 schedulers) with observability so the
+# failover dashboard can show leader flips during measure_leader_failover.py.
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: arbiter-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - arbiter-prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      scheduler:
+        condition: service_healthy
+      worker:
+        condition: service_started
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: arbiter-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - arbiter-grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  arbiter-prometheus-data:
+  arbiter-grafana-data:

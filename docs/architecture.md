@@ -125,7 +125,8 @@ sequenceDiagram
 | `internal/grpcapi` | gRPC service implementations for `ClusterControl` / `SchedulerAPI` |
 | `internal/scheduler` | Placement engine (filter/score, queue, retry) — Phase 3+ |
 | `internal/election` | Leader election (Postgres lease + fencing epochs) |
-| `internal/failuredetector` | Heartbeat-timeout tracking — Phase 2 |
+| `internal/failuredetector` | Heartbeat-timeout tracking |
+| `internal/metrics` | Prometheus collectors + /metrics handler |
 | `internal/store` | Postgres repositories — Phase 1+ |
 | `internal/cache` | Redis client wrappers — Phase 2+ |
 | `internal/executor` | Docker-based task execution on the worker — Phase 3 |
