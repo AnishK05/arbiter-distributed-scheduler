@@ -208,3 +208,16 @@ here whenever a phase's plan says "pick one, document the choice" or similar.
   plus Grafana panels on Cluster Overview and a dedicated **Arbiter Autoscaling** dashboard.
 - Enabled via `make phase9-up` (`ARBITER_AUTOSCALER=true` + thresholds). See
   `docs/benchmarks/phase9-autoscaling.md`.
+
+## Phase 10
+
+- **Standalone demo compose** (`deploy/docker-compose.demo.yml`, project name `arbiter-demo`): 3
+  scheduler replicas, **10 varied-capacity workers** (1000m–4000m, Σ 23500m), Postgres, Redis,
+  Prometheus (`prometheus.demo.yml` scrapes all 10 workers), Grafana, dashboard — one
+  `make demo-up` / `docker compose -f deploy/docker-compose.demo.yml up -d --build`.
+- **Autoscaler disabled** in the demo so the static 10-node claim stays clean (Phase 9 overlay
+  remains for autoscaling demos).
+- **`scripts/load_test.py`**: `--tasks` alias, `--wait-complete` samples peak concurrent `running`
+  + wall-clock/throughput for Section 10.
+- **`scripts/measure_node_failover.py`**: N-trial kill → dead → reassignment timing with p50/p95.
+- Resume-metric evidence: `docs/benchmarks/phase10-resume-metrics.md`.
