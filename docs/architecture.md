@@ -130,7 +130,6 @@ sequenceDiagram
 | `internal/store` | Postgres repositories — Phase 1+ |
 | `internal/cache` | Redis client wrappers — Phase 2+ |
 | `internal/executor` | Docker-based task execution on the worker — Phase 3 |
-| `internal/metrics` | Prometheus collectors — Phase 7 |
 | `gen/` | Generated protobuf/gRPC Go code (from `proto/`, via `make proto`) |
 | `proto/` | `.proto` service/message definitions + buf config |
 | `migrations/` | SQL schema migrations |
