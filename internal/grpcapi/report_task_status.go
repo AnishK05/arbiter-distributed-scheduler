@@ -15,6 +15,9 @@ import (
 // immediate status changes (running/succeeded/failed) here rather than
 // waiting for the next heartbeat.
 func (s *Server) ReportTaskStatus(ctx context.Context, req *arbiterv1.TaskStatusUpdate) (*arbiterv1.Ack, error) {
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
 	if err := s.applyTaskStatusUpdate(ctx, req); err != nil {
 		return nil, err
 	}

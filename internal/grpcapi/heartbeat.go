@@ -25,6 +25,9 @@ import (
 //     task status updates, recovers not_ready → ready if needed, and returns
 //     any tasks newly scheduled onto this node as assignments.
 func (s *Server) Heartbeat(ctx context.Context, req *arbiterv1.HeartbeatRequest) (*arbiterv1.HeartbeatResponse, error) {
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
 	if req.GetNodeId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "node_id is required")
 	}

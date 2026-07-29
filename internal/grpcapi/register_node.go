@@ -13,6 +13,9 @@ import (
 // RegisterNode implements arbiterv1.ClusterControlServer. See
 // store.Store.RegisterNode for the upsert-by-(hostname,address) semantics.
 func (s *Server) RegisterNode(ctx context.Context, req *arbiterv1.RegisterNodeRequest) (*arbiterv1.RegisterNodeResponse, error) {
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
 	if req.GetHostname() == "" {
 		return nil, status.Error(codes.InvalidArgument, "hostname is required")
 	}

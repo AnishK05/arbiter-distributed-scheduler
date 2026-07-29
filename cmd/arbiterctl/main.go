@@ -14,6 +14,7 @@ import (
 
 	arbiterv1 "github.com/AnishK05/arbiter-distributed-scheduler/gen/arbiter/v1"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/buildinfo"
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/leaderclient"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
@@ -76,11 +77,11 @@ func newSubmitCmd(schedulerAddr *string) *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
 
-			client, conn, err := dialAPI(ctx, *schedulerAddr)
+			client, closeFn, err := dialAPI(ctx, *schedulerAddr)
 			if err != nil {
 				return err
 			}
-			defer func() { _ = conn.Close() }()
+			defer func() { _ = closeFn() }()
 
 			constraintMap, err := parseKeyValues(constraints)
 			if err != nil {
@@ -144,11 +145,11 @@ func newGetNodesCmd(schedulerAddr *string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
 			defer cancel()
-			client, conn, err := dialAPI(ctx, *schedulerAddr)
+			client, closeFn, err := dialAPI(ctx, *schedulerAddr)
 			if err != nil {
 				return err
 			}
-			defer func() { _ = conn.Close() }()
+			defer func() { _ = closeFn() }()
 
 			resp, err := client.ListNodes(ctx, &arbiterv1.ListNodesRequest{})
 			if err != nil {
@@ -179,11 +180,11 @@ func newGetJobsCmd(schedulerAddr *string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
 			defer cancel()
-			client, conn, err := dialAPI(ctx, *schedulerAddr)
+			client, closeFn, err := dialAPI(ctx, *schedulerAddr)
 			if err != nil {
 				return err
 			}
-			defer func() { _ = conn.Close() }()
+			defer func() { _ = closeFn() }()
 
 			resp, err := client.ListJobs(ctx, &arbiterv1.ListJobsRequest{})
 			if err != nil {
@@ -215,11 +216,11 @@ func newGetTasksCmd(schedulerAddr *string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
 			defer cancel()
-			client, conn, err := dialAPI(ctx, *schedulerAddr)
+			client, closeFn, err := dialAPI(ctx, *schedulerAddr)
 			if err != nil {
 				return err
 			}
-			defer func() { _ = conn.Close() }()
+			defer func() { _ = closeFn() }()
 
 			resp, err := client.ListTasks(ctx, &arbiterv1.ListTasksRequest{JobId: jobID})
 			if err != nil {
@@ -290,15 +291,126 @@ func waitForJob(cmd *cobra.Command, client arbiterv1.SchedulerAPIClient, jobID s
 	}
 }
 
-func dialAPI(ctx context.Context, addr string) (arbiterv1.SchedulerAPIClient, *grpc.ClientConn, error) {
+func dialAPI(ctx context.Context, addr string) (arbiterv1.SchedulerAPIClient, func() error, error) {
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, nil, fmt.Errorf("dial scheduler at %s: %w", addr, err)
 	}
-	// NewClient is lazy; poke the connection so a down scheduler fails fast.
-	arbiterv1.NewSchedulerAPIClient(conn)
 	_ = ctx
-	return arbiterv1.NewSchedulerAPIClient(conn), conn, nil
+	client := &redirectingSchedulerAPI{
+		addr:  addr,
+		conn:  conn,
+		inner: arbiterv1.NewSchedulerAPIClient(conn),
+	}
+	return client, client.Close, nil
+}
+
+// redirectingSchedulerAPI follows Phase 6 NOT_LEADER redirects on mutating
+// RPCs (and retries list calls the same way for simplicity).
+type redirectingSchedulerAPI struct {
+	addr  string
+	conn  *grpc.ClientConn
+	inner arbiterv1.SchedulerAPIClient
+}
+
+func (c *redirectingSchedulerAPI) Close() error {
+	if c.conn == nil {
+		return nil
+	}
+	err := c.conn.Close()
+	c.conn = nil
+	return err
+}
+
+func (c *redirectingSchedulerAPI) redial(addr string) error {
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return err
+	}
+	if c.conn != nil {
+		_ = c.conn.Close()
+	}
+	c.addr = addr
+	c.conn = conn
+	c.inner = arbiterv1.NewSchedulerAPIClient(conn)
+	return nil
+}
+
+func (c *redirectingSchedulerAPI) withRedirect(fn func(arbiterv1.SchedulerAPIClient) error) error {
+	for attempt := 0; attempt < 4; attempt++ {
+		err := fn(c.inner)
+		if err == nil {
+			return nil
+		}
+		leader, ok := leaderclient.ParseLeaderAddr(err)
+		if !ok || leader == c.addr {
+			return err
+		}
+		if dialErr := c.redial(leader); dialErr != nil {
+			return fmt.Errorf("follow NOT_LEADER to %s: %w (original: %v)", leader, dialErr, err)
+		}
+	}
+	return fn(c.inner)
+}
+
+func (c *redirectingSchedulerAPI) SubmitJob(ctx context.Context, in *arbiterv1.SubmitJobRequest, opts ...grpc.CallOption) (*arbiterv1.Job, error) {
+	var out *arbiterv1.Job
+	err := c.withRedirect(func(client arbiterv1.SchedulerAPIClient) error {
+		var callErr error
+		out, callErr = client.SubmitJob(ctx, in, opts...)
+		return callErr
+	})
+	return out, err
+}
+
+func (c *redirectingSchedulerAPI) GetJob(ctx context.Context, in *arbiterv1.GetJobRequest, opts ...grpc.CallOption) (*arbiterv1.Job, error) {
+	var out *arbiterv1.Job
+	err := c.withRedirect(func(client arbiterv1.SchedulerAPIClient) error {
+		var callErr error
+		out, callErr = client.GetJob(ctx, in, opts...)
+		return callErr
+	})
+	return out, err
+}
+
+func (c *redirectingSchedulerAPI) ListJobs(ctx context.Context, in *arbiterv1.ListJobsRequest, opts ...grpc.CallOption) (*arbiterv1.ListJobsResponse, error) {
+	var out *arbiterv1.ListJobsResponse
+	err := c.withRedirect(func(client arbiterv1.SchedulerAPIClient) error {
+		var callErr error
+		out, callErr = client.ListJobs(ctx, in, opts...)
+		return callErr
+	})
+	return out, err
+}
+
+func (c *redirectingSchedulerAPI) ListTasks(ctx context.Context, in *arbiterv1.ListTasksRequest, opts ...grpc.CallOption) (*arbiterv1.ListTasksResponse, error) {
+	var out *arbiterv1.ListTasksResponse
+	err := c.withRedirect(func(client arbiterv1.SchedulerAPIClient) error {
+		var callErr error
+		out, callErr = client.ListTasks(ctx, in, opts...)
+		return callErr
+	})
+	return out, err
+}
+
+func (c *redirectingSchedulerAPI) ListNodes(ctx context.Context, in *arbiterv1.ListNodesRequest, opts ...grpc.CallOption) (*arbiterv1.ListNodesResponse, error) {
+	var out *arbiterv1.ListNodesResponse
+	err := c.withRedirect(func(client arbiterv1.SchedulerAPIClient) error {
+		var callErr error
+		out, callErr = client.ListNodes(ctx, in, opts...)
+		return callErr
+	})
+	return out, err
+}
+
+func (c *redirectingSchedulerAPI) CancelJob(ctx context.Context, in *arbiterv1.CancelJobRequest, opts ...grpc.CallOption) (*arbiterv1.Ack, error) {
+	var out *arbiterv1.Ack
+	err := c.withRedirect(func(client arbiterv1.SchedulerAPIClient) error {
+		var callErr error
+		out, callErr = client.CancelJob(ctx, in, opts...)
+		return callErr
+	})
+	return out, err
 }
 
 func shortID(id string) string {

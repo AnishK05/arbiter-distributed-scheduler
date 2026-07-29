@@ -1,0 +1,121 @@
+# Phase 6 overlay: 3 scheduler replicas for Postgres-lease leader election.
+# Usage:
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.phase6.yml up -d --build
+#   make phase6-up
+#
+# Advertise addresses use host.docker.internal + published host ports so both
+# in-cluster workers (via host-gateway) and host-side arbiterctl can follow
+# NOT_LEADER redirects after a failover.
+#
+# Workers initially dial replica 1 (:7000); if it is a follower they are
+# redirected to the current leader.
+
+services:
+  scheduler:
+    container_name: arbiter-scheduler-1
+    environment:
+      ARBITER_POSTGRES_URL: postgres://arbiter:arbiter@postgres:5432/arbiter?sslmode=disable
+      ARBITER_REDIS_ADDR: redis:6379
+      ARBITER_REPLICA_ID: scheduler-1
+      ARBITER_ADVERTISE_ADDR: host.docker.internal:7000
+      DOCKER_HOST: unix:///var/run/docker.sock
+    command:
+      - "--replica-id=scheduler-1"
+      - "--advertise-addr=host.docker.internal:7000"
+      - "--lease-ttl=5s"
+      - "--lease-renew-interval=1500ms"
+    ports:
+      - "7000:7000"
+      - "8080:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  scheduler-2:
+    build:
+      context: ..
+      dockerfile: Dockerfile.scheduler
+    container_name: arbiter-scheduler-2
+    restart: unless-stopped
+    environment:
+      ARBITER_POSTGRES_URL: postgres://arbiter:arbiter@postgres:5432/arbiter?sslmode=disable
+      ARBITER_REDIS_ADDR: redis:6379
+      ARBITER_REPLICA_ID: scheduler-2
+      ARBITER_ADVERTISE_ADDR: host.docker.internal:7001
+      DOCKER_HOST: unix:///var/run/docker.sock
+    command:
+      - "--grpc-addr=:7000"
+      - "--http-addr=:8080"
+      - "--replica-id=scheduler-2"
+      - "--advertise-addr=host.docker.internal:7001"
+      - "--lease-ttl=5s"
+      - "--lease-renew-interval=1500ms"
+    ports:
+      - "7001:7000"
+      - "8086:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  scheduler-3:
+    build:
+      context: ..
+      dockerfile: Dockerfile.scheduler
+    container_name: arbiter-scheduler-3
+    restart: unless-stopped
+    environment:
+      ARBITER_POSTGRES_URL: postgres://arbiter:arbiter@postgres:5432/arbiter?sslmode=disable
+      ARBITER_REDIS_ADDR: redis:6379
+      ARBITER_REPLICA_ID: scheduler-3
+      ARBITER_ADVERTISE_ADDR: host.docker.internal:7002
+      DOCKER_HOST: unix:///var/run/docker.sock
+    command:
+      - "--grpc-addr=:7000"
+      - "--http-addr=:8080"
+      - "--replica-id=scheduler-3"
+      - "--advertise-addr=host.docker.internal:7002"
+      - "--lease-ttl=5s"
+      - "--lease-renew-interval=1500ms"
+    ports:
+      - "7002:7000"
+      - "8087:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    environment:
+      ARBITER_SCHEDULER_ADDR: host.docker.internal:7000
+      DOCKER_HOST: unix:///var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      scheduler:
+        condition: service_healthy
+      scheduler-2:
+        condition: service_healthy
+      scheduler-3:
+        condition: service_healthy
+      workload:
+        condition: service_completed_successfully

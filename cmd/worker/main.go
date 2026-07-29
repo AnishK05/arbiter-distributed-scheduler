@@ -1,7 +1,6 @@
 // Command worker is the Arbiter worker-agent binary that runs on every
 // cluster node (simulated as a container in the demo cluster). As of
-// Phase 3 it registers with the scheduler, sends heartbeats, receives task
-// assignments, and executes them as Docker containers.
+// Phase 6 it follows NOT_LEADER redirects when dialing a follower replica.
 package main
 
 import (
@@ -22,6 +21,7 @@ import (
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/buildinfo"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/executor"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/health"
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/leaderclient"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -79,18 +79,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	conn, err := grpc.NewClient(*schedulerAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		logger.Error("failed to create gRPC client for scheduler", "error", err)
-		os.Exit(1)
-	}
-	defer func() { _ = conn.Close() }()
-
-	client := arbiterv1.NewClusterControlClient(conn)
+	dialer := newSchedulerDialer(logger, *schedulerAddr)
+	defer dialer.Close()
 
 	agent := &workerAgent{
 		logger: logger,
-		client: client,
+		dialer: dialer,
 		specs:  make(map[string]executor.TaskSpec),
 	}
 
@@ -111,7 +105,7 @@ func main() {
 		},
 		Labels: labels,
 	}
-	regResp, err := registerWithRetry(ctx, logger, client, registerReq)
+	regResp, err := registerWithRetry(ctx, logger, dialer, registerReq)
 	if err != nil {
 		logger.Error("failed to register with scheduler", "error", err)
 		os.Exit(1)
@@ -120,6 +114,7 @@ func main() {
 		"node_id", regResp.GetNodeId(),
 		"epoch", regResp.GetEpoch(),
 		"heartbeat_interval_ms", regResp.GetHeartbeatIntervalMs(),
+		"scheduler_addr", dialer.Addr(),
 	)
 
 	go agent.runHeartbeatLoop(ctx, registerReq, regResp)
@@ -150,9 +145,81 @@ func main() {
 	logger.Info("arbiter-worker stopped")
 }
 
+// schedulerDialer owns the current gRPC connection and follows NOT_LEADER
+// redirects by redialing the advertised leader address.
+type schedulerDialer struct {
+	logger *slog.Logger
+
+	mu     sync.Mutex
+	addr   string
+	conn   *grpc.ClientConn
+	client arbiterv1.ClusterControlClient
+}
+
+func newSchedulerDialer(logger *slog.Logger, addr string) *schedulerDialer {
+	return &schedulerDialer{logger: logger, addr: addr}
+}
+
+func (d *schedulerDialer) Addr() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.addr
+}
+
+func (d *schedulerDialer) Client() (arbiterv1.ClusterControlClient, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.client != nil {
+		return d.client, nil
+	}
+	return d.redialLocked(d.addr)
+}
+
+func (d *schedulerDialer) FollowRedirect(err error) bool {
+	addr, ok := leaderclient.ParseLeaderAddr(err)
+	if !ok {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if addr == d.addr && d.client != nil {
+		return true
+	}
+	d.logger.Info("following NOT_LEADER redirect", "from", d.addr, "to", addr)
+	if _, dialErr := d.redialLocked(addr); dialErr != nil {
+		d.logger.Warn("failed to dial redirected leader", "addr", addr, "error", dialErr)
+		return false
+	}
+	return true
+}
+
+func (d *schedulerDialer) redialLocked(addr string) (arbiterv1.ClusterControlClient, error) {
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, err
+	}
+	if d.conn != nil {
+		_ = d.conn.Close()
+	}
+	d.addr = addr
+	d.conn = conn
+	d.client = arbiterv1.NewClusterControlClient(conn)
+	return d.client, nil
+}
+
+func (d *schedulerDialer) Close() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.conn != nil {
+		_ = d.conn.Close()
+		d.conn = nil
+		d.client = nil
+	}
+}
+
 type workerAgent struct {
 	logger *slog.Logger
-	client arbiterv1.ClusterControlClient
+	dialer *schedulerDialer
 	exec   *executor.Executor
 
 	mu     sync.Mutex
@@ -190,17 +257,45 @@ func (a *workerAgent) handleTaskDone(result executor.Result) {
 	nodeID, epoch := a.identity()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := a.client.ReportTaskStatus(ctx, &arbiterv1.TaskStatusUpdate{
-		TaskId:   result.TaskID,
-		Status:   result.Status,
-		ExitCode: result.ExitCode,
-		Error:    result.Error,
-		NodeId:   nodeID,
-		Epoch:    epoch,
-	})
-	if err != nil {
+	if err := a.withLeaderRetry(ctx, func(client arbiterv1.ClusterControlClient) error {
+		_, err := client.ReportTaskStatus(ctx, &arbiterv1.TaskStatusUpdate{
+			TaskId:   result.TaskID,
+			Status:   result.Status,
+			ExitCode: result.ExitCode,
+			Error:    result.Error,
+			NodeId:   nodeID,
+			Epoch:    epoch,
+		})
+		return err
+	}); err != nil {
 		a.logger.Warn("failed to report task status", "task_id", result.TaskID, "error", err)
 	}
+}
+
+func (a *workerAgent) withLeaderRetry(ctx context.Context, fn func(arbiterv1.ClusterControlClient) error) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		client, err := a.dialer.Client()
+		if err != nil {
+			return err
+		}
+		err = fn(client)
+		if err == nil {
+			return nil
+		}
+		if !a.dialer.FollowRedirect(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+	}
+	client, err := a.dialer.Client()
+	if err != nil {
+		return err
+	}
+	return fn(client)
 }
 
 func (a *workerAgent) runHeartbeatLoop(ctx context.Context, registerReq *arbiterv1.RegisterNodeRequest, initial *arbiterv1.RegisterNodeResponse) {
@@ -224,13 +319,18 @@ func (a *workerAgent) runHeartbeatLoop(ctx context.Context, registerReq *arbiter
 			cpu, mem := a.exec.AllocatedResources(a.specs)
 			a.mu.Unlock()
 
-			resp, err := a.client.Heartbeat(ctx, &arbiterv1.HeartbeatRequest{
-				NodeId: nodeID,
-				Epoch:  epoch,
-				Allocated: &arbiterv1.NodeResources{
-					CpuMillicores: cpu,
-					MemoryMb:      mem,
-				},
+			var resp *arbiterv1.HeartbeatResponse
+			err := a.withLeaderRetry(ctx, func(client arbiterv1.ClusterControlClient) error {
+				var hbErr error
+				resp, hbErr = client.Heartbeat(ctx, &arbiterv1.HeartbeatRequest{
+					NodeId: nodeID,
+					Epoch:  epoch,
+					Allocated: &arbiterv1.NodeResources{
+						CpuMillicores: cpu,
+						MemoryMb:      mem,
+					},
+				})
+				return hbErr
 			})
 			if err != nil {
 				a.logger.Warn("heartbeat failed, will retry next interval", "node_id", nodeID, "error", err)
@@ -245,7 +345,7 @@ func (a *workerAgent) runHeartbeatLoop(ctx context.Context, registerReq *arbiter
 				a.specs = make(map[string]executor.TaskSpec)
 				a.mu.Unlock()
 
-				regResp, err := registerWithRetry(ctx, a.logger, a.client, registerReq)
+				regResp, err := registerWithRetry(ctx, a.logger, a.dialer, registerReq)
 				if err != nil {
 					a.logger.Error("failed to re-register after epoch invalidation", "error", err)
 					continue
@@ -301,11 +401,14 @@ func (a *workerAgent) handleAssignments(assignments []*arbiterv1.TaskAssignment)
 func (a *workerAgent) startAssignedTask(spec executor.TaskSpec) {
 	nodeID, epoch := a.identity()
 	reportCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	_, err := a.client.ReportTaskStatus(reportCtx, &arbiterv1.TaskStatusUpdate{
-		TaskId: spec.TaskID,
-		Status: "running",
-		NodeId: nodeID,
-		Epoch:  epoch,
+	err := a.withLeaderRetry(reportCtx, func(client arbiterv1.ClusterControlClient) error {
+		_, err := client.ReportTaskStatus(reportCtx, &arbiterv1.TaskStatusUpdate{
+			TaskId: spec.TaskID,
+			Status: "running",
+			NodeId: nodeID,
+			Epoch:  epoch,
+		})
+		return err
 	})
 	cancel()
 	if err != nil {
@@ -317,15 +420,23 @@ func (a *workerAgent) startAssignedTask(spec executor.TaskSpec) {
 	}
 }
 
-func registerWithRetry(ctx context.Context, logger *slog.Logger, client arbiterv1.ClusterControlClient, req *arbiterv1.RegisterNodeRequest) (*arbiterv1.RegisterNodeResponse, error) {
+func registerWithRetry(ctx context.Context, logger *slog.Logger, dialer *schedulerDialer, req *arbiterv1.RegisterNodeRequest) (*arbiterv1.RegisterNodeResponse, error) {
 	var lastErr error
 	for attempt := 1; attempt <= registerMaxAttempts; attempt++ {
-		resp, err := client.RegisterNode(ctx, req)
-		if err == nil {
-			return resp, nil
+		client, err := dialer.Client()
+		if err != nil {
+			lastErr = err
+		} else {
+			resp, err := client.RegisterNode(ctx, req)
+			if err == nil {
+				return resp, nil
+			}
+			lastErr = err
+			if dialer.FollowRedirect(err) {
+				continue
+			}
 		}
-		lastErr = err
-		logger.Warn("scheduler not ready yet, retrying registration", "attempt", attempt, "max_attempts", registerMaxAttempts, "error", err)
+		logger.Warn("scheduler not ready yet, retrying registration", "attempt", attempt, "max_attempts", registerMaxAttempts, "error", lastErr)
 
 		select {
 		case <-ctx.Done():

@@ -18,6 +18,9 @@ const (
 // SubmitJob implements arbiterv1.SchedulerAPIServer: validates the request,
 // persists a job, and expands it into N pending task rows.
 func (s *Server) SubmitJob(ctx context.Context, req *arbiterv1.SubmitJobRequest) (*arbiterv1.Job, error) {
+	if err := s.requireLeader(); err != nil {
+		return nil, err
+	}
 	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}

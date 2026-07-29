@@ -18,24 +18,32 @@ const (
 	defaultClaimLimit   = 50
 )
 
+// LeaderGate reports whether this replica should place tasks.
+// nil means always-leader (single-replica / unit tests).
+type LeaderGate interface {
+	IsLeader() bool
+}
+
 // Engine runs the background scheduling loop.
 type Engine struct {
 	store  *store.Store
 	logger *slog.Logger
+	leader LeaderGate
 
 	pollInterval time.Duration
 	claimLimit   int
 	filters      []Filter
 }
 
-// New constructs an Engine. logger may be nil (discard).
-func New(s *store.Store, logger *slog.Logger) *Engine {
+// New constructs an Engine. logger and leader may be nil (discard / always-leader).
+func New(s *store.Store, logger *slog.Logger, leader LeaderGate) *Engine {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	return &Engine{
 		store:        s,
 		logger:       logger,
+		leader:       leader,
 		pollInterval: defaultPollInterval,
 		claimLimit:   defaultClaimLimit,
 		filters:      DefaultFilters(),
@@ -60,7 +68,11 @@ func (e *Engine) Run(ctx context.Context) {
 }
 
 // tick claims a batch of pending tasks and places each via Filter → Score.
+// Followers (Phase 6) skip the tick entirely — only the elected leader places.
 func (e *Engine) tick(ctx context.Context) error {
+	if e.leader != nil && !e.leader.IsLeader() {
+		return nil
+	}
 	tx, tasks, err := e.store.ClaimPendingTasksForScheduling(ctx, e.claimLimit)
 	if err != nil {
 		return err

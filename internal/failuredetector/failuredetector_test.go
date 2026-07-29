@@ -68,7 +68,7 @@ func registerTestNode(t *testing.T, db *store.Store, hostname string) store.Node
 func TestTickLeavesFreshNodeReady(t *testing.T) {
 	db, c := testDeps(t)
 	ctx := context.Background()
-	d := New(db, c, nil, testConfig)
+	d := New(db, c, nil, testConfig, nil)
 
 	node := registerTestNode(t, db, "fd-fresh")
 	if err := c.SetLastSeen(ctx, node.ID); err != nil {
@@ -92,7 +92,7 @@ func TestTickLeavesFreshNodeReady(t *testing.T) {
 func TestTickMarksStaleNodeNotReady(t *testing.T) {
 	db, c := testDeps(t)
 	ctx := context.Background()
-	d := New(db, c, nil, testConfig)
+	d := New(db, c, nil, testConfig, nil)
 
 	node := registerTestNode(t, db, "fd-not-ready")
 	staleBy := testConfig.NotReadyAfter + time.Second // past not_ready, short of dead
@@ -117,7 +117,7 @@ func TestTickMarksStaleNodeNotReady(t *testing.T) {
 func TestTickMarksVeryStaleNodeDead(t *testing.T) {
 	db, c := testDeps(t)
 	ctx := context.Background()
-	d := New(db, c, nil, testConfig)
+	d := New(db, c, nil, testConfig, nil)
 
 	node := registerTestNode(t, db, "fd-dead")
 	staleBy := testConfig.DeadAfter + time.Second
@@ -142,7 +142,7 @@ func TestTickMarksVeryStaleNodeDead(t *testing.T) {
 func TestTickTreatsMissingHeartbeatAsMaximallyStale(t *testing.T) {
 	db, c := testDeps(t)
 	ctx := context.Background()
-	d := New(db, c, nil, testConfig)
+	d := New(db, c, nil, testConfig, nil)
 
 	// Registering seeds Redis (internal/grpcapi.RegisterNode does this;
 	// here we call the store directly, bypassing that, to simulate a node
@@ -166,7 +166,7 @@ func TestTickTreatsMissingHeartbeatAsMaximallyStale(t *testing.T) {
 func TestTickDoesNotReprocessAlreadyDeadNode(t *testing.T) {
 	db, c := testDeps(t)
 	ctx := context.Background()
-	d := New(db, c, nil, testConfig)
+	d := New(db, c, nil, testConfig, nil)
 
 	node := registerTestNode(t, db, "fd-already-dead")
 	dead, err := db.MarkNodeDead(ctx, node.ID)
@@ -182,5 +182,30 @@ func TestTickDoesNotReprocessAlreadyDeadNode(t *testing.T) {
 	}
 	if got.Epoch != dead.Node.Epoch {
 		t.Fatalf("expected epoch to stay at %d for an already-dead node, got %d (ListActiveNodes should have excluded it)", dead.Node.Epoch, got.Epoch)
+	}
+}
+
+type alwaysFollower struct{}
+
+func (alwaysFollower) IsLeader() bool { return false }
+
+func TestTickSkippedWhenNotLeader(t *testing.T) {
+	db, c := testDeps(t)
+	ctx := context.Background()
+	d := New(db, c, nil, testConfig, alwaysFollower{})
+
+	node := registerTestNode(t, db, "fd-follower-skip")
+	if err := c.SetLastSeenAt(ctx, node.ID, time.Now().Add(-10*time.Second)); err != nil {
+		t.Fatalf("SetLastSeenAt: %v", err)
+	}
+
+	d.tick(ctx)
+
+	got, err := db.GetNode(ctx, node.ID)
+	if err != nil {
+		t.Fatalf("GetNode: %v", err)
+	}
+	if got.Status != store.NodeStatusReady {
+		t.Fatalf("follower must not mark nodes dead, got %q", got.Status)
 	}
 }

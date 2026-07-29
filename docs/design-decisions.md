@@ -135,3 +135,23 @@ here whenever a phase's plan says "pick one, document the choice" or similar.
   `dockerutil.KillTaskContainers` for orphaned task IDs so reassignment cannot double-execute.
 - **Each container start gets a unique `ARBITER_RUN_ID`** (label + env). Workloads print it so chaos
   runs can assert no duplicate successful executions for the same task.
+
+## Phase 6
+
+- **Followers reject mutating RPCs with `NOT_LEADER` + advertise address**, rather than
+  transparently proxying to the leader. Reads (`ListNodes` / `ListJobs` / `ListTasks`) stay
+  available on any replica. Workers and `arbiterctl` parse the `FailedPrecondition` message and
+  redial the advertised leader (`internal/leaderclient`). Proxying would hide failover from clients
+  and couple every replica to outbound fan-out; redirect keeps the control plane simpler and matches
+  how many gRPC control planes surface leadership.
+- **Lease defaults: TTL 5s, renew every 1.5s** (`internal/election`). Only the lease holder runs the
+  scheduling loop and failure detector; followers keep renewing/attempting the lease and otherwise
+  idle. Takeover bumps `leader_lease.epoch` and emits a `leader_elected` event.
+- **Phase 6 DoD cluster is a compose overlay** (`deploy/docker-compose.phase6.yml`, `make phase6-up`)
+  with 3 scheduler replicas on host ports 7000/7001/7002. Advertise addresses use
+  `host.docker.internal:<port>` plus `extra_hosts: host.docker.internal:host-gateway` so both
+  in-cluster workers and host-side `arbiterctl` can follow redirects. The full 10-worker
+  `docker-compose.demo.yml` remains a Phase 10 deliverable.
+- **Failover measurement** is automated by `scripts/measure_leader_failover.py` (kill leader
+  container → poll `leader_lease` for a new holder). Target: election within one lease TTL (5s).
+  See `docs/benchmarks/phase6-leader-failover.md`.
