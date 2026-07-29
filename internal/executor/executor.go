@@ -178,7 +178,10 @@ func (e *Executor) createAndStart(ctx context.Context, spec TaskSpec) (container
 			"arbiter.mem_request_mb": fmt.Sprintf("%d", spec.MemRequestMB),
 		},
 		"HostConfig": map[string]any{
-			"AutoRemove": true,
+			// Keep exited containers so arbiterctl/dashboard can fetch logs
+			// via Docker label lookup (Phase 8). Failure detector still
+			// reaps orphaned containers by name/label when nodes die.
+			"AutoRemove": false,
 		},
 	}
 	if len(spec.Command) > 0 {

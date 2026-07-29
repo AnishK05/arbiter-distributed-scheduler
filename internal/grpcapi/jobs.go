@@ -81,6 +81,21 @@ func (s *Server) GetJob(ctx context.Context, req *arbiterv1.GetJobRequest) (*arb
 	return toProtoJob(job), nil
 }
 
+// GetTask implements arbiterv1.SchedulerAPIServer.
+func (s *Server) GetTask(ctx context.Context, req *arbiterv1.GetTaskRequest) (*arbiterv1.Task, error) {
+	if req.GetTaskId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "task_id is required")
+	}
+	task, err := s.store.GetTask(ctx, req.GetTaskId())
+	if err == store.ErrTaskNotFound {
+		return nil, status.Error(codes.NotFound, "task not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get task: %v", err)
+	}
+	return toProtoTask(task), nil
+}
+
 // ListJobs implements arbiterv1.SchedulerAPIServer.
 func (s *Server) ListJobs(ctx context.Context, _ *arbiterv1.ListJobsRequest) (*arbiterv1.ListJobsResponse, error) {
 	jobs, err := s.store.ListJobs(ctx)

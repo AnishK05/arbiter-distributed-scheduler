@@ -223,6 +223,7 @@ var ClusterControl_ServiceDesc = grpc.ServiceDesc{
 const (
 	SchedulerAPI_SubmitJob_FullMethodName = "/arbiter.v1.SchedulerAPI/SubmitJob"
 	SchedulerAPI_GetJob_FullMethodName    = "/arbiter.v1.SchedulerAPI/GetJob"
+	SchedulerAPI_GetTask_FullMethodName   = "/arbiter.v1.SchedulerAPI/GetTask"
 	SchedulerAPI_ListJobs_FullMethodName  = "/arbiter.v1.SchedulerAPI/ListJobs"
 	SchedulerAPI_ListTasks_FullMethodName = "/arbiter.v1.SchedulerAPI/ListTasks"
 	SchedulerAPI_ListNodes_FullMethodName = "/arbiter.v1.SchedulerAPI/ListNodes"
@@ -238,6 +239,7 @@ const (
 type SchedulerAPIClient interface {
 	SubmitJob(ctx context.Context, in *SubmitJobRequest, opts ...grpc.CallOption) (*Job, error)
 	GetJob(ctx context.Context, in *GetJobRequest, opts ...grpc.CallOption) (*Job, error)
+	GetTask(ctx context.Context, in *GetTaskRequest, opts ...grpc.CallOption) (*Task, error)
 	ListJobs(ctx context.Context, in *ListJobsRequest, opts ...grpc.CallOption) (*ListJobsResponse, error)
 	ListTasks(ctx context.Context, in *ListTasksRequest, opts ...grpc.CallOption) (*ListTasksResponse, error)
 	ListNodes(ctx context.Context, in *ListNodesRequest, opts ...grpc.CallOption) (*ListNodesResponse, error)
@@ -266,6 +268,16 @@ func (c *schedulerAPIClient) GetJob(ctx context.Context, in *GetJobRequest, opts
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Job)
 	err := c.cc.Invoke(ctx, SchedulerAPI_GetJob_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *schedulerAPIClient) GetTask(ctx context.Context, in *GetTaskRequest, opts ...grpc.CallOption) (*Task, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Task)
+	err := c.cc.Invoke(ctx, SchedulerAPI_GetTask_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -321,6 +333,7 @@ func (c *schedulerAPIClient) CancelJob(ctx context.Context, in *CancelJobRequest
 type SchedulerAPIServer interface {
 	SubmitJob(context.Context, *SubmitJobRequest) (*Job, error)
 	GetJob(context.Context, *GetJobRequest) (*Job, error)
+	GetTask(context.Context, *GetTaskRequest) (*Task, error)
 	ListJobs(context.Context, *ListJobsRequest) (*ListJobsResponse, error)
 	ListTasks(context.Context, *ListTasksRequest) (*ListTasksResponse, error)
 	ListNodes(context.Context, *ListNodesRequest) (*ListNodesResponse, error)
@@ -340,6 +353,9 @@ func (UnimplementedSchedulerAPIServer) SubmitJob(context.Context, *SubmitJobRequ
 }
 func (UnimplementedSchedulerAPIServer) GetJob(context.Context, *GetJobRequest) (*Job, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetJob not implemented")
+}
+func (UnimplementedSchedulerAPIServer) GetTask(context.Context, *GetTaskRequest) (*Task, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTask not implemented")
 }
 func (UnimplementedSchedulerAPIServer) ListJobs(context.Context, *ListJobsRequest) (*ListJobsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListJobs not implemented")
@@ -406,6 +422,24 @@ func _SchedulerAPI_GetJob_Handler(srv interface{}, ctx context.Context, dec func
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(SchedulerAPIServer).GetJob(ctx, req.(*GetJobRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SchedulerAPI_GetTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SchedulerAPIServer).GetTask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SchedulerAPI_GetTask_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SchedulerAPIServer).GetTask(ctx, req.(*GetTaskRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -496,6 +530,10 @@ var SchedulerAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetJob",
 			Handler:    _SchedulerAPI_GetJob_Handler,
+		},
+		{
+			MethodName: "GetTask",
+			Handler:    _SchedulerAPI_GetTask_Handler,
 		},
 		{
 			MethodName: "ListJobs",

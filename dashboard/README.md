@@ -1,4 +1,12 @@
-# Dashboard
+# Arbiter web dashboard (Phase 8)
 
-Next.js + TypeScript web UI (added in Phase 8): cluster/node grid with live utilization, job/task
-tables, submit-job form, and a live event feed. See `IMPLEMENTATION_PLAN.md` Phase 8.
+Next.js + TypeScript UI for the cluster control plane.
+
+```bash
+# Against a running scheduler (http://localhost:8080)
+cd dashboard
+npm install
+NEXT_PUBLIC_API_BASE=http://localhost:8080 npm run dev
+```
+
+Or with the full stack: `make phase8-up` → http://localhost:3100

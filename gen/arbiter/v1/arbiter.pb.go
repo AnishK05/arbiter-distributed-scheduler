@@ -972,6 +972,50 @@ func (x *GetJobRequest) GetJobId() string {
 	return ""
 }
 
+type GetTaskRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetTaskRequest) Reset() {
+	*x = GetTaskRequest{}
+	mi := &file_arbiter_v1_arbiter_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetTaskRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetTaskRequest) ProtoMessage() {}
+
+func (x *GetTaskRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_arbiter_v1_arbiter_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetTaskRequest.ProtoReflect.Descriptor instead.
+func (*GetTaskRequest) Descriptor() ([]byte, []int) {
+	return file_arbiter_v1_arbiter_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *GetTaskRequest) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
 type ListJobsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -980,7 +1024,7 @@ type ListJobsRequest struct {
 
 func (x *ListJobsRequest) Reset() {
 	*x = ListJobsRequest{}
-	mi := &file_arbiter_v1_arbiter_proto_msgTypes[13]
+	mi := &file_arbiter_v1_arbiter_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -992,7 +1036,7 @@ func (x *ListJobsRequest) String() string {
 func (*ListJobsRequest) ProtoMessage() {}
 
 func (x *ListJobsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_arbiter_v1_arbiter_proto_msgTypes[13]
+	mi := &file_arbiter_v1_arbiter_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1005,7 +1049,7 @@ func (x *ListJobsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobsRequest.ProtoReflect.Descriptor instead.
 func (*ListJobsRequest) Descriptor() ([]byte, []int) {
-	return file_arbiter_v1_arbiter_proto_rawDescGZIP(), []int{13}
+	return file_arbiter_v1_arbiter_proto_rawDescGZIP(), []int{14}
 }
 
 type ListJobsResponse struct {
@@ -1017,7 +1061,7 @@ type ListJobsResponse struct {
 
 func (x *ListJobsResponse) Reset() {
 	*x = ListJobsResponse{}
-	mi := &file_arbiter_v1_arbiter_proto_msgTypes[14]
+	mi := &file_arbiter_v1_arbiter_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1029,7 +1073,7 @@ func (x *ListJobsResponse) String() string {
 func (*ListJobsResponse) ProtoMessage() {}
 
 func (x *ListJobsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_arbiter_v1_arbiter_proto_msgTypes[14]
+	mi := &file_arbiter_v1_arbiter_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1042,7 +1086,7 @@ func (x *ListJobsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobsResponse.ProtoReflect.Descriptor instead.
 func (*ListJobsResponse) Descriptor() ([]byte, []int) {
-	return file_arbiter_v1_arbiter_proto_rawDescGZIP(), []int{14}
+	return file_arbiter_v1_arbiter_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ListJobsResponse) GetJobs() []*Job {
@@ -1061,7 +1105,7 @@ type ListTasksRequest struct {
 
 func (x *ListTasksRequest) Reset() {
 	*x = ListTasksRequest{}
-	mi := &file_arbiter_v1_arbiter_proto_msgTypes[15]
+	mi := &file_arbiter_v1_arbiter_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1073,7 +1117,7 @@ func (x *ListTasksRequest) String() string {
 func (*ListTasksRequest) ProtoMessage() {}
 
 func (x *ListTasksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_arbiter_v1_arbiter_proto_msgTypes[15]
+	mi := &file_arbiter_v1_arbiter_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1086,7 +1130,7 @@ func (x *ListTasksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTasksRequest.ProtoReflect.Descriptor instead.
 func (*ListTasksRequest) Descriptor() ([]byte, []int) {
-	return file_arbiter_v1_arbiter_proto_rawDescGZIP(), []int{15}
+	return file_arbiter_v1_arbiter_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ListTasksRequest) GetJobId() string {
@@ -1105,7 +1149,7 @@ type ListTasksResponse struct {
 
 func (x *ListTasksResponse) Reset() {
 	*x = ListTasksResponse{}
-	mi := &file_arbiter_v1_arbiter_proto_msgTypes[16]
+	mi := &file_arbiter_v1_arbiter_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1117,7 +1161,7 @@ func (x *ListTasksResponse) String() string {
 func (*ListTasksResponse) ProtoMessage() {}
 
 func (x *ListTasksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_arbiter_v1_arbiter_proto_msgTypes[16]
+	mi := &file_arbiter_v1_arbiter_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1130,7 +1174,7 @@ func (x *ListTasksResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTasksResponse.ProtoReflect.Descriptor instead.
 func (*ListTasksResponse) Descriptor() ([]byte, []int) {
-	return file_arbiter_v1_arbiter_proto_rawDescGZIP(), []int{16}
+	return file_arbiter_v1_arbiter_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ListTasksResponse) GetTasks() []*Task {
@@ -1148,7 +1192,7 @@ type ListNodesRequest struct {
 
 func (x *ListNodesRequest) Reset() {
 	*x = ListNodesRequest{}
-	mi := &file_arbiter_v1_arbiter_proto_msgTypes[17]
+	mi := &file_arbiter_v1_arbiter_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1160,7 +1204,7 @@ func (x *ListNodesRequest) String() string {
 func (*ListNodesRequest) ProtoMessage() {}
 
 func (x *ListNodesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_arbiter_v1_arbiter_proto_msgTypes[17]
+	mi := &file_arbiter_v1_arbiter_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1173,7 +1217,7 @@ func (x *ListNodesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListNodesRequest.ProtoReflect.Descriptor instead.
 func (*ListNodesRequest) Descriptor() ([]byte, []int) {
-	return file_arbiter_v1_arbiter_proto_rawDescGZIP(), []int{17}
+	return file_arbiter_v1_arbiter_proto_rawDescGZIP(), []int{18}
 }
 
 type ListNodesResponse struct {
@@ -1185,7 +1229,7 @@ type ListNodesResponse struct {
 
 func (x *ListNodesResponse) Reset() {
 	*x = ListNodesResponse{}
-	mi := &file_arbiter_v1_arbiter_proto_msgTypes[18]
+	mi := &file_arbiter_v1_arbiter_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1197,7 +1241,7 @@ func (x *ListNodesResponse) String() string {
 func (*ListNodesResponse) ProtoMessage() {}
 
 func (x *ListNodesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_arbiter_v1_arbiter_proto_msgTypes[18]
+	mi := &file_arbiter_v1_arbiter_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1210,7 +1254,7 @@ func (x *ListNodesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListNodesResponse.ProtoReflect.Descriptor instead.
 func (*ListNodesResponse) Descriptor() ([]byte, []int) {
-	return file_arbiter_v1_arbiter_proto_rawDescGZIP(), []int{18}
+	return file_arbiter_v1_arbiter_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ListNodesResponse) GetNodes() []*Node {
@@ -1229,7 +1273,7 @@ type CancelJobRequest struct {
 
 func (x *CancelJobRequest) Reset() {
 	*x = CancelJobRequest{}
-	mi := &file_arbiter_v1_arbiter_proto_msgTypes[19]
+	mi := &file_arbiter_v1_arbiter_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1241,7 +1285,7 @@ func (x *CancelJobRequest) String() string {
 func (*CancelJobRequest) ProtoMessage() {}
 
 func (x *CancelJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_arbiter_v1_arbiter_proto_msgTypes[19]
+	mi := &file_arbiter_v1_arbiter_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1254,7 +1298,7 @@ func (x *CancelJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelJobRequest.ProtoReflect.Descriptor instead.
 func (*CancelJobRequest) Descriptor() ([]byte, []int) {
-	return file_arbiter_v1_arbiter_proto_rawDescGZIP(), []int{19}
+	return file_arbiter_v1_arbiter_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *CancelJobRequest) GetJobId() string {
@@ -1357,7 +1401,9 @@ const file_arbiter_v1_arbiter_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"&\n" +
 	"\rGetJobRequest\x12\x15\n" +
-	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"\x11\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\")\n" +
+	"\x0eGetTaskRequest\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\"\x11\n" +
 	"\x0fListJobsRequest\"7\n" +
 	"\x10ListJobsResponse\x12#\n" +
 	"\x04jobs\x18\x01 \x03(\v2\x0f.arbiter.v1.JobR\x04jobs\")\n" +
@@ -1373,10 +1419,11 @@ const file_arbiter_v1_arbiter_proto_rawDesc = "" +
 	"\x0eClusterControl\x12Q\n" +
 	"\fRegisterNode\x12\x1f.arbiter.v1.RegisterNodeRequest\x1a .arbiter.v1.RegisterNodeResponse\x12H\n" +
 	"\tHeartbeat\x12\x1c.arbiter.v1.HeartbeatRequest\x1a\x1d.arbiter.v1.HeartbeatResponse\x12A\n" +
-	"\x10ReportTaskStatus\x12\x1c.arbiter.v1.TaskStatusUpdate\x1a\x0f.arbiter.v1.Ack2\x97\x03\n" +
+	"\x10ReportTaskStatus\x12\x1c.arbiter.v1.TaskStatusUpdate\x1a\x0f.arbiter.v1.Ack2\xd0\x03\n" +
 	"\fSchedulerAPI\x12:\n" +
 	"\tSubmitJob\x12\x1c.arbiter.v1.SubmitJobRequest\x1a\x0f.arbiter.v1.Job\x124\n" +
-	"\x06GetJob\x12\x19.arbiter.v1.GetJobRequest\x1a\x0f.arbiter.v1.Job\x12E\n" +
+	"\x06GetJob\x12\x19.arbiter.v1.GetJobRequest\x1a\x0f.arbiter.v1.Job\x127\n" +
+	"\aGetTask\x12\x1a.arbiter.v1.GetTaskRequest\x1a\x10.arbiter.v1.Task\x12E\n" +
 	"\bListJobs\x12\x1b.arbiter.v1.ListJobsRequest\x1a\x1c.arbiter.v1.ListJobsResponse\x12H\n" +
 	"\tListTasks\x12\x1c.arbiter.v1.ListTasksRequest\x1a\x1d.arbiter.v1.ListTasksResponse\x12H\n" +
 	"\tListNodes\x12\x1c.arbiter.v1.ListNodesRequest\x1a\x1d.arbiter.v1.ListNodesResponse\x12:\n" +
@@ -1394,7 +1441,7 @@ func file_arbiter_v1_arbiter_proto_rawDescGZIP() []byte {
 	return file_arbiter_v1_arbiter_proto_rawDescData
 }
 
-var file_arbiter_v1_arbiter_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
+var file_arbiter_v1_arbiter_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_arbiter_v1_arbiter_proto_goTypes = []any{
 	(*NodeResources)(nil),        // 0: arbiter.v1.NodeResources
 	(*RegisterNodeRequest)(nil),  // 1: arbiter.v1.RegisterNodeRequest
@@ -1409,32 +1456,33 @@ var file_arbiter_v1_arbiter_proto_goTypes = []any{
 	(*Job)(nil),                  // 10: arbiter.v1.Job
 	(*SubmitJobRequest)(nil),     // 11: arbiter.v1.SubmitJobRequest
 	(*GetJobRequest)(nil),        // 12: arbiter.v1.GetJobRequest
-	(*ListJobsRequest)(nil),      // 13: arbiter.v1.ListJobsRequest
-	(*ListJobsResponse)(nil),     // 14: arbiter.v1.ListJobsResponse
-	(*ListTasksRequest)(nil),     // 15: arbiter.v1.ListTasksRequest
-	(*ListTasksResponse)(nil),    // 16: arbiter.v1.ListTasksResponse
-	(*ListNodesRequest)(nil),     // 17: arbiter.v1.ListNodesRequest
-	(*ListNodesResponse)(nil),    // 18: arbiter.v1.ListNodesResponse
-	(*CancelJobRequest)(nil),     // 19: arbiter.v1.CancelJobRequest
-	nil,                          // 20: arbiter.v1.RegisterNodeRequest.LabelsEntry
-	nil,                          // 21: arbiter.v1.Node.LabelsEntry
-	nil,                          // 22: arbiter.v1.Job.ConstraintsEntry
-	nil,                          // 23: arbiter.v1.SubmitJobRequest.ConstraintsEntry
+	(*GetTaskRequest)(nil),       // 13: arbiter.v1.GetTaskRequest
+	(*ListJobsRequest)(nil),      // 14: arbiter.v1.ListJobsRequest
+	(*ListJobsResponse)(nil),     // 15: arbiter.v1.ListJobsResponse
+	(*ListTasksRequest)(nil),     // 16: arbiter.v1.ListTasksRequest
+	(*ListTasksResponse)(nil),    // 17: arbiter.v1.ListTasksResponse
+	(*ListNodesRequest)(nil),     // 18: arbiter.v1.ListNodesRequest
+	(*ListNodesResponse)(nil),    // 19: arbiter.v1.ListNodesResponse
+	(*CancelJobRequest)(nil),     // 20: arbiter.v1.CancelJobRequest
+	nil,                          // 21: arbiter.v1.RegisterNodeRequest.LabelsEntry
+	nil,                          // 22: arbiter.v1.Node.LabelsEntry
+	nil,                          // 23: arbiter.v1.Job.ConstraintsEntry
+	nil,                          // 24: arbiter.v1.SubmitJobRequest.ConstraintsEntry
 }
 var file_arbiter_v1_arbiter_proto_depIdxs = []int32{
 	0,  // 0: arbiter.v1.RegisterNodeRequest.capacity:type_name -> arbiter.v1.NodeResources
-	20, // 1: arbiter.v1.RegisterNodeRequest.labels:type_name -> arbiter.v1.RegisterNodeRequest.LabelsEntry
+	21, // 1: arbiter.v1.RegisterNodeRequest.labels:type_name -> arbiter.v1.RegisterNodeRequest.LabelsEntry
 	0,  // 2: arbiter.v1.HeartbeatRequest.allocated:type_name -> arbiter.v1.NodeResources
 	6,  // 3: arbiter.v1.HeartbeatRequest.task_updates:type_name -> arbiter.v1.TaskStatusUpdate
 	5,  // 4: arbiter.v1.HeartbeatResponse.new_assignments:type_name -> arbiter.v1.TaskAssignment
 	0,  // 5: arbiter.v1.TaskAssignment.request:type_name -> arbiter.v1.NodeResources
 	0,  // 6: arbiter.v1.Node.capacity:type_name -> arbiter.v1.NodeResources
 	0,  // 7: arbiter.v1.Node.allocated:type_name -> arbiter.v1.NodeResources
-	21, // 8: arbiter.v1.Node.labels:type_name -> arbiter.v1.Node.LabelsEntry
+	22, // 8: arbiter.v1.Node.labels:type_name -> arbiter.v1.Node.LabelsEntry
 	0,  // 9: arbiter.v1.Job.request:type_name -> arbiter.v1.NodeResources
-	22, // 10: arbiter.v1.Job.constraints:type_name -> arbiter.v1.Job.ConstraintsEntry
+	23, // 10: arbiter.v1.Job.constraints:type_name -> arbiter.v1.Job.ConstraintsEntry
 	0,  // 11: arbiter.v1.SubmitJobRequest.request:type_name -> arbiter.v1.NodeResources
-	23, // 12: arbiter.v1.SubmitJobRequest.constraints:type_name -> arbiter.v1.SubmitJobRequest.ConstraintsEntry
+	24, // 12: arbiter.v1.SubmitJobRequest.constraints:type_name -> arbiter.v1.SubmitJobRequest.ConstraintsEntry
 	10, // 13: arbiter.v1.ListJobsResponse.jobs:type_name -> arbiter.v1.Job
 	9,  // 14: arbiter.v1.ListTasksResponse.tasks:type_name -> arbiter.v1.Task
 	8,  // 15: arbiter.v1.ListNodesResponse.nodes:type_name -> arbiter.v1.Node
@@ -1443,21 +1491,23 @@ var file_arbiter_v1_arbiter_proto_depIdxs = []int32{
 	6,  // 18: arbiter.v1.ClusterControl.ReportTaskStatus:input_type -> arbiter.v1.TaskStatusUpdate
 	11, // 19: arbiter.v1.SchedulerAPI.SubmitJob:input_type -> arbiter.v1.SubmitJobRequest
 	12, // 20: arbiter.v1.SchedulerAPI.GetJob:input_type -> arbiter.v1.GetJobRequest
-	13, // 21: arbiter.v1.SchedulerAPI.ListJobs:input_type -> arbiter.v1.ListJobsRequest
-	15, // 22: arbiter.v1.SchedulerAPI.ListTasks:input_type -> arbiter.v1.ListTasksRequest
-	17, // 23: arbiter.v1.SchedulerAPI.ListNodes:input_type -> arbiter.v1.ListNodesRequest
-	19, // 24: arbiter.v1.SchedulerAPI.CancelJob:input_type -> arbiter.v1.CancelJobRequest
-	2,  // 25: arbiter.v1.ClusterControl.RegisterNode:output_type -> arbiter.v1.RegisterNodeResponse
-	4,  // 26: arbiter.v1.ClusterControl.Heartbeat:output_type -> arbiter.v1.HeartbeatResponse
-	7,  // 27: arbiter.v1.ClusterControl.ReportTaskStatus:output_type -> arbiter.v1.Ack
-	10, // 28: arbiter.v1.SchedulerAPI.SubmitJob:output_type -> arbiter.v1.Job
-	10, // 29: arbiter.v1.SchedulerAPI.GetJob:output_type -> arbiter.v1.Job
-	14, // 30: arbiter.v1.SchedulerAPI.ListJobs:output_type -> arbiter.v1.ListJobsResponse
-	16, // 31: arbiter.v1.SchedulerAPI.ListTasks:output_type -> arbiter.v1.ListTasksResponse
-	18, // 32: arbiter.v1.SchedulerAPI.ListNodes:output_type -> arbiter.v1.ListNodesResponse
-	7,  // 33: arbiter.v1.SchedulerAPI.CancelJob:output_type -> arbiter.v1.Ack
-	25, // [25:34] is the sub-list for method output_type
-	16, // [16:25] is the sub-list for method input_type
+	13, // 21: arbiter.v1.SchedulerAPI.GetTask:input_type -> arbiter.v1.GetTaskRequest
+	14, // 22: arbiter.v1.SchedulerAPI.ListJobs:input_type -> arbiter.v1.ListJobsRequest
+	16, // 23: arbiter.v1.SchedulerAPI.ListTasks:input_type -> arbiter.v1.ListTasksRequest
+	18, // 24: arbiter.v1.SchedulerAPI.ListNodes:input_type -> arbiter.v1.ListNodesRequest
+	20, // 25: arbiter.v1.SchedulerAPI.CancelJob:input_type -> arbiter.v1.CancelJobRequest
+	2,  // 26: arbiter.v1.ClusterControl.RegisterNode:output_type -> arbiter.v1.RegisterNodeResponse
+	4,  // 27: arbiter.v1.ClusterControl.Heartbeat:output_type -> arbiter.v1.HeartbeatResponse
+	7,  // 28: arbiter.v1.ClusterControl.ReportTaskStatus:output_type -> arbiter.v1.Ack
+	10, // 29: arbiter.v1.SchedulerAPI.SubmitJob:output_type -> arbiter.v1.Job
+	10, // 30: arbiter.v1.SchedulerAPI.GetJob:output_type -> arbiter.v1.Job
+	9,  // 31: arbiter.v1.SchedulerAPI.GetTask:output_type -> arbiter.v1.Task
+	15, // 32: arbiter.v1.SchedulerAPI.ListJobs:output_type -> arbiter.v1.ListJobsResponse
+	17, // 33: arbiter.v1.SchedulerAPI.ListTasks:output_type -> arbiter.v1.ListTasksResponse
+	19, // 34: arbiter.v1.SchedulerAPI.ListNodes:output_type -> arbiter.v1.ListNodesResponse
+	7,  // 35: arbiter.v1.SchedulerAPI.CancelJob:output_type -> arbiter.v1.Ack
+	26, // [26:36] is the sub-list for method output_type
+	16, // [16:26] is the sub-list for method input_type
 	16, // [16:16] is the sub-list for extension type_name
 	16, // [16:16] is the sub-list for extension extendee
 	0,  // [0:16] is the sub-list for field type_name
@@ -1474,7 +1524,7 @@ func file_arbiter_v1_arbiter_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_arbiter_v1_arbiter_proto_rawDesc), len(file_arbiter_v1_arbiter_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   24,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

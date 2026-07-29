@@ -79,18 +79,91 @@ func (s *Store) ListEventsForEntity(ctx context.Context, entityType, entityID st
 
 	var events []Event
 	for rows.Next() {
-		var e Event
-		var message *string
-		if err := rows.Scan(&e.ID, &e.EntityType, &e.EntityID, &e.EventType, &message, &e.CreatedAt); err != nil {
-			return nil, fmt.Errorf("store: scan event row: %w", err)
+		e, err := scanEvent(rows)
+		if err != nil {
+			return nil, err
 		}
-		if message != nil {
-			e.Message = *message
-		}
-		events = append(events, e)
+		events = append(events, *e)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: list events: %w", err)
 	}
 	return events, nil
+}
+
+// ListRecentEvents returns the newest events (newest last), up to limit.
+func (s *Store) ListRecentEvents(ctx context.Context, limit int) ([]Event, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, entity_type, entity_id, event_type, message, created_at
+		 FROM (
+		   SELECT id, entity_type, entity_id, event_type, message, created_at
+		   FROM events
+		   ORDER BY id DESC
+		   LIMIT $1
+		 ) recent
+		 ORDER BY id ASC`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: list recent events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []Event
+	for rows.Next() {
+		e, err := scanEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, *e)
+	}
+	return events, rows.Err()
+}
+
+// ListEventsAfter returns events with id > afterID, oldest first, up to limit.
+func (s *Store) ListEventsAfter(ctx context.Context, afterID int64, limit int) ([]Event, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, entity_type, entity_id, event_type, message, created_at
+		 FROM events
+		 WHERE id > $1
+		 ORDER BY id ASC
+		 LIMIT $2`,
+		afterID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: list events after: %w", err)
+	}
+	defer rows.Close()
+
+	var events []Event
+	for rows.Next() {
+		e, err := scanEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, *e)
+	}
+	return events, rows.Err()
+}
+
+type eventScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanEvent(row eventScanner) (*Event, error) {
+	var e Event
+	var message *string
+	if err := row.Scan(&e.ID, &e.EntityType, &e.EntityID, &e.EventType, &message, &e.CreatedAt); err != nil {
+		return nil, fmt.Errorf("store: scan event row: %w", err)
+	}
+	if message != nil {
+		e.Message = *message
+	}
+	return &e, nil
 }
