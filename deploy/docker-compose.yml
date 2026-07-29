@@ -55,7 +55,9 @@ services:
       dockerfile: Dockerfile.workload
     image: arbiter-workload:latest
     container_name: arbiter-workload-build
-    command: ["true"]
+    # Override ENTRYPOINT (sleep_n.py) so this one-shot service just
+    # materializes the image on the daemon and exits 0.
+    entrypoint: ["true"]
     restart: "no"
 
   scheduler:

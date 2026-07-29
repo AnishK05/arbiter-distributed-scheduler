@@ -159,16 +159,21 @@ func (e *Executor) createAndStart(ctx context.Context, spec TaskSpec) (string, e
 	name := containerName(spec.TaskID)
 	_ = e.removeContainer(ctx, name)
 
+	// Resource requests (CPU/memory) are enforced by the scheduler's
+	// accounting, not via Docker cgroup limits. Applying NanoCpus/Memory
+	// here fails on some nested/cgroup-v2 hosts ("cannot enter cgroupv2 …
+	// with domain controllers — it is in threaded mode"), so we deliberately
+	// omit them. Capacity is still tracked in Postgres via job requests.
 	createBody := map[string]any{
 		"Image": spec.Image,
 		"Labels": map[string]string{
-			"arbiter.task_id": spec.TaskID,
-			"arbiter.managed": "true",
+			"arbiter.task_id":        spec.TaskID,
+			"arbiter.managed":        "true",
+			"arbiter.cpu_request_mc": fmt.Sprintf("%d", spec.CPURequestMillicores),
+			"arbiter.mem_request_mb": fmt.Sprintf("%d", spec.MemRequestMB),
 		},
 		"HostConfig": map[string]any{
 			"AutoRemove": true,
-			"NanoCpus":   spec.CPURequestMillicores * 1_000_000,
-			"Memory":     spec.MemRequestMB * 1024 * 1024,
 		},
 	}
 	if len(spec.Command) > 0 {
@@ -184,7 +189,7 @@ func (e *Executor) createAndStart(ctx context.Context, spec TaskSpec) (string, e
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
 		return "", fmt.Errorf("docker create: status %d: %s", resp.StatusCode, string(body))
@@ -219,7 +224,7 @@ func (e *Executor) waitForExit(ctx context.Context, containerID, taskID string) 
 		}
 		return Result{TaskID: taskID, Status: "failed", ExitCode: 1, Error: err.Error()}
 	}
-	defer waitResp.Body.Close()
+	defer func() { _ = waitResp.Body.Close() }()
 	waitRaw, _ := io.ReadAll(waitResp.Body)
 	var waited struct {
 		StatusCode int `json:"StatusCode"`

@@ -257,23 +257,29 @@ func (a *workerAgent) handleAssignments(ctx context.Context, assignments []*arbi
 			"mem_mb", spec.MemRequestMB,
 		)
 
-		// Report running as soon as we accept the assignment (before/while
-		// the container starts) so the control plane's resource accounting
-		// reflects the reservation promptly.
-		reportCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		_, err := a.client.ReportTaskStatus(reportCtx, &arbiterv1.TaskStatusUpdate{
-			TaskId: spec.TaskID,
-			Status: "running",
-		})
-		cancel()
-		if err != nil {
-			a.logger.Warn("failed to report task running", "task_id", spec.TaskID, "error", err)
-		}
+		// Launch asynchronously so a slow docker create/start can't stall
+		// the heartbeat loop past the failure-detector dead threshold.
+		go a.startAssignedTask(spec)
+	}
+}
 
-		if err := a.exec.Start(ctx, spec); err != nil {
-			a.logger.Error("failed to start task container", "task_id", spec.TaskID, "error", err)
-			// onDone already reports failed for start errors.
-		}
+func (a *workerAgent) startAssignedTask(spec executor.TaskSpec) {
+	// Report running as soon as we accept the assignment (before/while
+	// the container starts) so the control plane's resource accounting
+	// reflects the reservation promptly.
+	reportCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_, err := a.client.ReportTaskStatus(reportCtx, &arbiterv1.TaskStatusUpdate{
+		TaskId: spec.TaskID,
+		Status: "running",
+	})
+	cancel()
+	if err != nil {
+		a.logger.Warn("failed to report task running", "task_id", spec.TaskID, "error", err)
+	}
+
+	if err := a.exec.Start(context.Background(), spec); err != nil {
+		a.logger.Error("failed to start task container", "task_id", spec.TaskID, "error", err)
+		// onDone already reports failed for start errors.
 	}
 }
 

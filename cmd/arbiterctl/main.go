@@ -94,8 +94,10 @@ func newSubmitCmd(schedulerAddr *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("submit job: %w", err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "submitted job %s (%s) replicas=%d image=%s\n",
-				job.GetName(), job.GetId(), job.GetReplicas(), job.GetImage())
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "submitted job %s (%s) replicas=%d image=%s\n",
+				job.GetName(), job.GetId(), job.GetReplicas(), job.GetImage()); err != nil {
+				return err
+			}
 
 			if !wait {
 				return nil
@@ -144,13 +146,17 @@ func newGetNodesCmd(schedulerAddr *string) *cobra.Command {
 				return err
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tHOSTNAME\tSTATUS\tEPOCH\tCPU(alloc/cap)\tMEM(alloc/cap)")
+			if _, err := fmt.Fprintln(w, "ID\tHOSTNAME\tSTATUS\tEPOCH\tCPU(alloc/cap)\tMEM(alloc/cap)"); err != nil {
+				return err
+			}
 			for _, n := range resp.GetNodes() {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d/%d\t%d/%d\n",
+				if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d/%d\t%d/%d\n",
 					shortID(n.GetId()), n.GetHostname(), n.GetStatus(), n.GetEpoch(),
 					n.GetAllocated().GetCpuMillicores(), n.GetCapacity().GetCpuMillicores(),
 					n.GetAllocated().GetMemoryMb(), n.GetCapacity().GetMemoryMb(),
-				)
+				); err != nil {
+					return err
+				}
 			}
 			return w.Flush()
 		},
@@ -175,13 +181,17 @@ func newGetJobsCmd(schedulerAddr *string) *cobra.Command {
 				return err
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tNAME\tREPLICAS\tIMAGE\tCPU\tMEM\tPOLICY")
+			if _, err := fmt.Fprintln(w, "ID\tNAME\tREPLICAS\tIMAGE\tCPU\tMEM\tPOLICY"); err != nil {
+				return err
+			}
 			for _, j := range resp.GetJobs() {
-				fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%d\t%s\n",
+				if _, err := fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%d\t%s\n",
 					shortID(j.GetId()), j.GetName(), j.GetReplicas(), j.GetImage(),
 					j.GetRequest().GetCpuMillicores(), j.GetRequest().GetMemoryMb(),
 					j.GetSchedulingPolicy(),
-				)
+				); err != nil {
+					return err
+				}
 			}
 			return w.Flush()
 		},
@@ -207,12 +217,16 @@ func newGetTasksCmd(schedulerAddr *string) *cobra.Command {
 				return err
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tJOB\tSTATUS\tNODE\tEXIT\tERROR")
+			if _, err := fmt.Fprintln(w, "ID\tJOB\tSTATUS\tNODE\tEXIT\tERROR"); err != nil {
+				return err
+			}
 			for _, t := range resp.GetTasks() {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%v\t%s\n",
+				if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%v\t%s\n",
 					shortID(t.GetId()), shortID(t.GetJobId()), t.GetStatus(),
 					shortID(t.GetAssignedNodeId()), t.GetExitCode(), t.GetLastError(),
-				)
+				); err != nil {
+					return err
+				}
 			}
 			return w.Flush()
 		},
@@ -247,13 +261,17 @@ func waitForJob(cmd *cobra.Command, client arbiterv1.SchedulerAPIClient, jobID s
 				pending++
 			}
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "job %s: succeeded=%d failed=%d inflight=%d\n",
-			shortID(jobID), succeeded, failed, pending)
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "job %s: succeeded=%d failed=%d inflight=%d\n",
+			shortID(jobID), succeeded, failed, pending); err != nil {
+			return err
+		}
 		if pending == 0 {
 			if failed > 0 {
 				return fmt.Errorf("job finished with %d failed task(s)", failed)
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "all tasks succeeded")
+			if _, err := fmt.Fprintln(cmd.OutOrStdout(), "all tasks succeeded"); err != nil {
+				return err
+			}
 			return nil
 		}
 		if time.Now().After(deadline) {

@@ -91,7 +91,12 @@ here whenever a phase's plan says "pick one, document the choice" or similar.
   require Go ≥ 1.25, which is past this project's pinned `go 1.22.2` toolchain. The executor only
   needs create/start/wait/kill/remove — a thin `net/http` + unix-dial client is enough and keeps
   `go.mod` free of that dependency tree.
+- **Docker cgroup CPU/memory limits are not applied on task containers.** Scheduler-side accounting
+  (sum of `scheduled`/`running` job requests vs node capacity) is the source of truth for placement.
+  Passing `NanoCpus`/`Memory` through the Engine API fails on some nested/cgroup-v2 hosts with
+  "cannot enter cgroupv2 … with domain controllers — it is in threaded mode"; omitting those fields
+  keeps demos portable. Requests are still recorded as container labels for inspection.
 - **Workers mount the host Docker socket (Docker-out-of-Docker)** so task containers are siblings of
   the worker container on the same daemon. The compose stack builds `arbiter-workload:latest` via a
-  one-shot `workload` service before the worker starts, so the default demo image is always present
-  for `arbiterctl submit`.
+  one-shot `workload` service (ENTRYPOINT overridden to `true`) before the worker starts, so the
+  default demo image is always present for `arbiterctl submit`.
