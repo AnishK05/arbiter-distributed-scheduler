@@ -95,6 +95,25 @@
         { "expr": "max(arbiter_queue_depth)", "legendFormat": "pending", "refId": "A" },
         { "expr": "max(arbiter_tasks_running)", "legendFormat": "running", "refId": "B" }
       ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Autoscaler Scale Events",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "description": "Phase 9 leader autoscaler scale-up / scale-down counters.",
+      "targets": [
+        { "expr": "sum(increase(arbiter_scale_up_total[5m]))", "legendFormat": "scale-up (5m)", "refId": "A" },
+        { "expr": "sum(increase(arbiter_scale_down_total[5m]))", "legendFormat": "scale-down (5m)", "refId": "B" },
+        { "expr": "max(arbiter_autoscaled_workers)", "legendFormat": "autoscaled workers", "refId": "C" }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Autoscaled Workers",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "targets": [{ "expr": "max(arbiter_autoscaled_workers)", "refId": "A" }]
     }
   ]
 }

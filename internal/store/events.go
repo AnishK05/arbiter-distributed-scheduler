@@ -15,6 +15,9 @@ const (
 	EventTypeNodeNotReady   = "node_not_ready"
 	EventTypeNodeRecovered  = "node_recovered"
 	EventTypeNodeDead       = "node_dead"
+	EventTypeNodeCordoned   = "node_cordoned"
+	EventTypeNodeScaledUp   = "node_scaled_up"
+	EventTypeNodeScaledDown = "node_scaled_down"
 
 	EventTypeJobSubmitted       = "job_submitted"
 	EventTypeTaskScheduled      = "task_scheduled"
@@ -60,6 +63,14 @@ func insertEvent(ctx context.Context, q execer, entityType, entityID, eventType,
 		entityType, entityID, eventType, message,
 	)
 	return err
+}
+
+// InsertEvent records a standalone audit event (used by the Phase 9 autoscaler).
+func (s *Store) InsertEvent(ctx context.Context, entityType, entityID, eventType, message string) error {
+	if err := insertEvent(ctx, s.pool, entityType, entityID, eventType, message); err != nil {
+		return fmt.Errorf("store: insert event: %w", err)
+	}
+	return nil
 }
 
 // ListEventsForEntity returns every event recorded for a given entity,

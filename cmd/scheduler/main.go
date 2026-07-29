@@ -18,6 +18,7 @@ import (
 	"time"
 
 	arbiterv1 "github.com/AnishK05/arbiter-distributed-scheduler/gen/arbiter/v1"
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/autoscaler"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/buildinfo"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/cache"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/dockerutil"
@@ -53,6 +54,11 @@ func main() {
 	advertiseAddr := flag.String("advertise-addr", envOr("ARBITER_ADVERTISE_ADDR", ""), "gRPC host:port returned to clients/workers in NOT_LEADER redirects (defaults to localhost + grpc port)")
 	leaseTTL := flag.Duration("lease-ttl", election.DefaultLeaseTTL, "leader lease time-to-live")
 	leaseRenew := flag.Duration("lease-renew-interval", election.DefaultRenewInterval, "how often to renew/attempt the leader lease")
+	autoscalerEnabled := flag.Bool("autoscaler", autoscaler.ParseBoolEnv("ARBITER_AUTOSCALER", false), "enable Phase 9 simulated worker autoscaling (leader-only)")
+	autoscalerPending := flag.Int64("autoscaler-pending-threshold", 3, "pending-task count that must be sustained to scale up")
+	autoscalerSustain := flag.Duration("autoscaler-sustain", 8*time.Second, "how long pending must stay above threshold before scale-up")
+	autoscalerIdle := flag.Duration("autoscaler-idle", 20*time.Second, "how long an autoscaled worker must stay empty before reclaim")
+	autoscalerMax := flag.Int("autoscaler-max", 3, "maximum number of autoscaled worker containers")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -143,6 +149,14 @@ func main() {
 	dockerClient := dockerutil.New()
 	go eventfanout.New(db, rdb, elector, logger).Run(ctx)
 	logger.Info("event fanout started")
+
+	autoCfg := autoscaler.DefaultConfig()
+	autoCfg.Enabled = *autoscalerEnabled
+	autoCfg.PendingThreshold = *autoscalerPending
+	autoCfg.SustainWindow = *autoscalerSustain
+	autoCfg.IdleWindow = *autoscalerIdle
+	autoCfg.MaxAutoscaledWorkers = *autoscalerMax
+	go autoscaler.New(db, dockerClient, elector, logger, met, autoCfg).Run(ctx)
 
 	grpcServer := grpc.NewServer()
 	server := grpcapi.New(db, rdb, int32(*heartbeatIntervalMS), elector, met)

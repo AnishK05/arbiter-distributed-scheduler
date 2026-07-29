@@ -10,7 +10,7 @@ leader election, fencing/fault-tolerance design, gRPC API, milestones, and bench
 lives in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). A quick-reference architecture summary
 with diagrams is in [`docs/architecture.md`](docs/architecture.md).
 
-**Status:** Phase 8 (CLI describe/logs + web dashboard) — see
+**Status:** Phase 9 (simulated autoscaling) — see
 [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) Section 8 for the full milestone list.
 
 ## Tech Stack
@@ -86,6 +86,11 @@ make phase8-up
 # Open http://localhost:3100 — submit a job and watch tasks/events/utilization live
 ./bin/arbiterctl describe task <task-id>
 ./bin/arbiterctl logs <task-id>
+
+# Phase 9: simulated autoscaling (burst load → extra worker → idle reclaim)
+make phase9-up
+./bin/arbiterctl submit burst --replicas 40 --cpu-millicores 200 --memory-mb 64 --command 25
+# Watch events / Grafana → Arbiter Autoscaling for scale-up then scale-down
 
 # Tear down
 make down
