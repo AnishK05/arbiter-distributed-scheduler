@@ -18,7 +18,9 @@ import (
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 func main() {
@@ -291,6 +293,13 @@ func waitForJob(cmd *cobra.Command, client arbiterv1.SchedulerAPIClient, jobID s
 	}
 }
 
+type redirectingSchedulerAPI struct {
+	seed  string
+	addr  string
+	conn  *grpc.ClientConn
+	inner arbiterv1.SchedulerAPIClient
+}
+
 func dialAPI(ctx context.Context, addr string) (arbiterv1.SchedulerAPIClient, func() error, error) {
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -298,19 +307,12 @@ func dialAPI(ctx context.Context, addr string) (arbiterv1.SchedulerAPIClient, fu
 	}
 	_ = ctx
 	client := &redirectingSchedulerAPI{
+		seed:  addr,
 		addr:  addr,
 		conn:  conn,
 		inner: arbiterv1.NewSchedulerAPIClient(conn),
 	}
 	return client, client.Close, nil
-}
-
-// redirectingSchedulerAPI follows Phase 6 NOT_LEADER redirects on mutating
-// RPCs (and retries list calls the same way for simplicity).
-type redirectingSchedulerAPI struct {
-	addr  string
-	conn  *grpc.ClientConn
-	inner arbiterv1.SchedulerAPIClient
 }
 
 func (c *redirectingSchedulerAPI) Close() error {
@@ -337,18 +339,24 @@ func (c *redirectingSchedulerAPI) redial(addr string) error {
 }
 
 func (c *redirectingSchedulerAPI) withRedirect(fn func(arbiterv1.SchedulerAPIClient) error) error {
-	for attempt := 0; attempt < 4; attempt++ {
+	for attempt := 0; attempt < 6; attempt++ {
 		err := fn(c.inner)
 		if err == nil {
 			return nil
 		}
-		leader, ok := leaderclient.ParseLeaderAddr(err)
-		if !ok || leader == c.addr {
-			return err
+		if leader, ok := leaderclient.ParseLeaderAddr(err); ok && leader != c.addr {
+			if dialErr := c.redial(leader); dialErr != nil {
+				return fmt.Errorf("follow NOT_LEADER to %s: %w (original: %v)", leader, dialErr, err)
+			}
+			continue
 		}
-		if dialErr := c.redial(leader); dialErr != nil {
-			return fmt.Errorf("follow NOT_LEADER to %s: %w (original: %v)", leader, dialErr, err)
+		if status.Code(err) == codes.Unavailable && c.addr != c.seed {
+			if dialErr := c.redial(c.seed); dialErr != nil {
+				return fmt.Errorf("fallback to seed %s: %w (original: %v)", c.seed, dialErr, err)
+			}
+			continue
 		}
+		return err
 	}
 	return fn(c.inner)
 }

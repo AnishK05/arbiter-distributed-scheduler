@@ -1,6 +1,7 @@
 // Command worker is the Arbiter worker-agent binary that runs on every
 // cluster node (simulated as a container in the demo cluster). As of
-// Phase 6 it follows NOT_LEADER redirects when dialing a follower replica.
+// Phase 6 it follows NOT_LEADER redirects and rotates across a configured
+// list of scheduler addresses when the current leader is unreachable.
 package main
 
 import (
@@ -24,7 +25,9 @@ import (
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/leaderclient"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -34,7 +37,8 @@ const (
 )
 
 func main() {
-	schedulerAddr := flag.String("scheduler-addr", envOr("ARBITER_SCHEDULER_ADDR", "localhost:7000"), "gRPC address of the scheduler's ClusterControl service")
+	schedulerAddr := flag.String("scheduler-addr", envOr("ARBITER_SCHEDULER_ADDR", "localhost:7000"), "primary gRPC address of a scheduler replica")
+	schedulerAddrs := flag.String("scheduler-addrs", envOr("ARBITER_SCHEDULER_ADDRS", ""), "comma-separated scheduler addresses to rotate through on failover (defaults to --scheduler-addr)")
 	hostname := flag.String("hostname", "", "hostname this node advertises to the scheduler (defaults to os.Hostname())")
 	address := flag.String("address", "", "address this node advertises to the scheduler (defaults to '<hostname><http-addr>')")
 	cpuCapacityMillicores := flag.Int64("cpu-capacity-millicores", 1000, "simulated CPU capacity for this node, in millicores")
@@ -64,12 +68,19 @@ func main() {
 		resolvedAddress = fmt.Sprintf("%s%s", resolvedHostname, *httpAddr)
 	}
 
+	addrs := parseAddrList(*schedulerAddrs)
+	if len(addrs) == 0 {
+		addrs = []string{*schedulerAddr}
+	} else if !containsAddr(addrs, *schedulerAddr) {
+		addrs = append([]string{*schedulerAddr}, addrs...)
+	}
+
 	logger.Info("arbiter-worker starting",
 		"version", buildinfo.Version,
 		"commit", buildinfo.Commit,
 		"hostname", resolvedHostname,
 		"address", resolvedAddress,
-		"scheduler_addr", *schedulerAddr,
+		"scheduler_addrs", addrs,
 		"cpu_capacity_millicores", *cpuCapacityMillicores,
 		"mem_capacity_mb", *memCapacityMB,
 		"http_addr", *httpAddr,
@@ -79,7 +90,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	dialer := newSchedulerDialer(logger, *schedulerAddr)
+	dialer := newSchedulerDialer(logger, addrs)
 	defer dialer.Close()
 
 	agent := &workerAgent{
@@ -145,19 +156,21 @@ func main() {
 	logger.Info("arbiter-worker stopped")
 }
 
-// schedulerDialer owns the current gRPC connection and follows NOT_LEADER
-// redirects by redialing the advertised leader address.
+// schedulerDialer owns the current gRPC connection, follows NOT_LEADER
+// redirects, and rotates across configured replica addresses on Unavailable.
 type schedulerDialer struct {
 	logger *slog.Logger
+	addrs  []string
 
 	mu     sync.Mutex
+	idx    int
 	addr   string
 	conn   *grpc.ClientConn
 	client arbiterv1.ClusterControlClient
 }
 
-func newSchedulerDialer(logger *slog.Logger, addr string) *schedulerDialer {
-	return &schedulerDialer{logger: logger, addr: addr}
+func newSchedulerDialer(logger *slog.Logger, addrs []string) *schedulerDialer {
+	return &schedulerDialer{logger: logger, addrs: addrs, addr: addrs[0]}
 }
 
 func (d *schedulerDialer) Addr() string {
@@ -193,6 +206,27 @@ func (d *schedulerDialer) FollowRedirect(err error) bool {
 	return true
 }
 
+// RecoverFromUnavailable rotates to the next configured scheduler address.
+func (d *schedulerDialer) RecoverFromUnavailable(err error) bool {
+	if err == nil || status.Code(err) != codes.Unavailable {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.addrs) == 0 {
+		return false
+	}
+	d.idx = (d.idx + 1) % len(d.addrs)
+	target := d.addrs[d.idx]
+	d.logger.Info("current scheduler unreachable; rotating",
+		"from", d.addr, "to", target, "error", err)
+	if _, dialErr := d.redialLocked(target); dialErr != nil {
+		d.logger.Warn("failed to dial rotated scheduler", "addr", target, "error", dialErr)
+		return false
+	}
+	return true
+}
+
 func (d *schedulerDialer) redialLocked(addr string) (arbiterv1.ClusterControlClient, error) {
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -204,6 +238,12 @@ func (d *schedulerDialer) redialLocked(addr string) (arbiterv1.ClusterControlCli
 	d.addr = addr
 	d.conn = conn
 	d.client = arbiterv1.NewClusterControlClient(conn)
+	for i, a := range d.addrs {
+		if a == addr {
+			d.idx = i
+			break
+		}
+	}
 	return d.client, nil
 }
 
@@ -273,7 +313,7 @@ func (a *workerAgent) handleTaskDone(result executor.Result) {
 }
 
 func (a *workerAgent) withLeaderRetry(ctx context.Context, fn func(arbiterv1.ClusterControlClient) error) error {
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < 8; attempt++ {
 		client, err := a.dialer.Client()
 		if err != nil {
 			return err
@@ -282,14 +322,13 @@ func (a *workerAgent) withLeaderRetry(ctx context.Context, fn func(arbiterv1.Clu
 		if err == nil {
 			return nil
 		}
-		if !a.dialer.FollowRedirect(err) {
-			return err
+		if a.dialer.FollowRedirect(err) {
+			continue
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+		if a.dialer.RecoverFromUnavailable(err) {
+			continue
 		}
+		return err
 	}
 	client, err := a.dialer.Client()
 	if err != nil {
@@ -432,7 +471,7 @@ func registerWithRetry(ctx context.Context, logger *slog.Logger, dialer *schedul
 				return resp, nil
 			}
 			lastErr = err
-			if dialer.FollowRedirect(err) {
+			if dialer.FollowRedirect(err) || dialer.RecoverFromUnavailable(err) {
 				continue
 			}
 		}
@@ -471,4 +510,24 @@ func parseLabels(raw string) (map[string]string, error) {
 		out[key] = val
 	}
 	return out, nil
+}
+
+func parseAddrList(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func containsAddr(addrs []string, addr string) bool {
+	for _, a := range addrs {
+		if a == addr {
+			return true
+		}
+	}
+	return false
 }

@@ -23,7 +23,7 @@ services:
       - "--replica-id=scheduler-1"
       - "--advertise-addr=host.docker.internal:7000"
       - "--lease-ttl=5s"
-      - "--lease-renew-interval=1500ms"
+      - "--lease-renew-interval=1s"
     ports:
       - "7000:7000"
       - "8080:8080"
@@ -48,7 +48,7 @@ services:
       - "--replica-id=scheduler-2"
       - "--advertise-addr=host.docker.internal:7001"
       - "--lease-ttl=5s"
-      - "--lease-renew-interval=1500ms"
+      - "--lease-renew-interval=1s"
     ports:
       - "7001:7000"
       - "8086:8080"
@@ -85,7 +85,7 @@ services:
       - "--replica-id=scheduler-3"
       - "--advertise-addr=host.docker.internal:7002"
       - "--lease-ttl=5s"
-      - "--lease-renew-interval=1500ms"
+      - "--lease-renew-interval=1s"
     ports:
       - "7002:7000"
       - "8087:8080"
@@ -107,6 +107,7 @@ services:
   worker:
     environment:
       ARBITER_SCHEDULER_ADDR: host.docker.internal:7000
+      ARBITER_SCHEDULER_ADDRS: host.docker.internal:7000,host.docker.internal:7001,host.docker.internal:7002
       DOCKER_HOST: unix:///var/run/docker.sock
     extra_hosts:
       - "host.docker.internal:host-gateway"

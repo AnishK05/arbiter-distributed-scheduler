@@ -14,7 +14,7 @@ import (
 
 const (
 	DefaultLeaseTTL      = 5 * time.Second
-	DefaultRenewInterval = 1500 * time.Millisecond
+	DefaultRenewInterval = 1 * time.Second
 )
 
 // Config tunes the lease loop.

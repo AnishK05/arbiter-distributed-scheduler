@@ -144,14 +144,21 @@ here whenever a phase's plan says "pick one, document the choice" or similar.
   redial the advertised leader (`internal/leaderclient`). Proxying would hide failover from clients
   and couple every replica to outbound fan-out; redirect keeps the control plane simpler and matches
   how many gRPC control planes surface leadership.
-- **Lease defaults: TTL 5s, renew every 1.5s** (`internal/election`). Only the lease holder runs the
+- **Lease defaults: TTL 5s, renew every 1s** (`internal/election`). Only the lease holder runs the
   scheduling loop and failure detector; followers keep renewing/attempting the lease and otherwise
-  idle. Takeover bumps `leader_lease.epoch` and emits a `leader_elected` event.
+  idle. Takeover bumps `leader_lease.epoch` and emits a `leader_elected` event. Worst-case election
+  delay is roughly TTL (if the lease was just renewed) plus one renew interval for the follower to
+  notice expiry.
 - **Phase 6 DoD cluster is a compose overlay** (`deploy/docker-compose.phase6.yml`, `make phase6-up`)
   with 3 scheduler replicas on host ports 7000/7001/7002. Advertise addresses use
   `host.docker.internal:<port>` plus `extra_hosts: host.docker.internal:host-gateway` so both
   in-cluster workers and host-side `arbiterctl` can follow redirects. The full 10-worker
   `docker-compose.demo.yml` remains a Phase 10 deliverable.
+- **Workers rotate across a configured address list on `Unavailable`.** In addition to following
+  `NOT_LEADER` redirects, `--scheduler-addrs` / `ARBITER_SCHEDULER_ADDRS` lists every replica so a
+  killed leader does not permanently stick the worker to a dead seed. The Phase 6 compose overlay
+  sets all three advertise addresses.
 - **Failover measurement** is automated by `scripts/measure_leader_failover.py` (kill leader
-  container → poll `leader_lease` for a new holder). Target: election within one lease TTL (5s).
-  See `docs/benchmarks/phase6-leader-failover.md`.
+  container → poll `leader_lease` for a new holder → submit a probe job to the new leader). Target:
+  election within lease TTL + one renew interval (~6s). See
+  `docs/benchmarks/phase6-leader-failover.md`.

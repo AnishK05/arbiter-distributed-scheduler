@@ -80,8 +80,8 @@ func (s *Store) TryAcquireOrRenewLease(ctx context.Context, identity, advertiseA
 		SET leader_id = $1,
 		    leader_addr = $2,
 		    epoch = $3,
-		    acquired_at = $4,
-		    expires_at = $4 + ($5 * interval '1 second')
+		    acquired_at = $4::timestamptz,
+		    expires_at = $4::timestamptz + make_interval(secs => $5::double precision)
 		WHERE id = 1
 		RETURNING leader_id, leader_addr, epoch, acquired_at, expires_at`,
 		identity, advertiseAddr, newEpoch, now, ttlSeconds))

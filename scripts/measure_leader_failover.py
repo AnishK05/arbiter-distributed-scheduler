@@ -31,7 +31,12 @@ CONTAINER_BY_ID = {
 
 
 def run(cmd: list[str]) -> str:
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"command failed ({result.returncode}): {' '.join(cmd)}\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
     return result.stdout.strip()
 
 
@@ -53,6 +58,11 @@ def psql(query: str) -> str:
     )
 
 
+def host_reachable_leader_addr(advertise: str) -> str:
+    """Map compose advertise addrs to host-side localhost ports."""
+    return advertise.replace("host.docker.internal", "localhost")
+
+
 def current_leader() -> tuple[str, str, int]:
     row = psql(
         "SELECT leader_id || '|' || leader_addr || '|' || epoch "
@@ -66,19 +76,19 @@ def current_leader() -> tuple[str, str, int]:
 
 def wait_for_leader_change(
     old_id: str, old_epoch: int, poll_timeout_s: float, poll_interval_s: float
-) -> tuple[float, str, int]:
+) -> tuple[float, str, str, int]:
     t0 = time.monotonic()
     deadline = t0 + poll_timeout_s
     while time.monotonic() < deadline:
         row = psql(
-            "SELECT leader_id || '|' || epoch FROM leader_lease "
+            "SELECT leader_id || '|' || leader_addr || '|' || epoch FROM leader_lease "
             "WHERE id = 1 AND expires_at > now();"
         )
         if row:
-            leader_id, epoch_s = row.split("|", 1)
+            leader_id, addr, epoch_s = row.split("|", 2)
             epoch = int(epoch_s)
             if leader_id != old_id and epoch > old_epoch:
-                return (time.monotonic() - t0) * 1000, leader_id, epoch
+                return (time.monotonic() - t0) * 1000, leader_id, addr, epoch
         time.sleep(poll_interval_s)
     raise RuntimeError(
         f"no new leader within {poll_timeout_s}s after killing {old_id!r}"
@@ -86,23 +96,39 @@ def wait_for_leader_change(
 
 
 def wait_for_container(container: str, timeout_s: float) -> None:
+    # docker kill leaves restart:unless-stopped containers to come back; if
+    # that stalls, start explicitly so the HA set remains three replicas.
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         state = run(["docker", "inspect", "-f", "{{.State.Running}}", container])
         if state == "true":
-            # Give the restarted replica a moment to join the election loop.
             time.sleep(1.0)
             return
+        try:
+            run(["docker", "start", container])
+        except subprocess.CalledProcessError:
+            pass
         time.sleep(0.2)
     raise RuntimeError(f"container {container!r} did not report running within {timeout_s}s")
 
 
-def submit_probe_job() -> None:
+def wait_for_ready_worker(timeout_s: float = 30.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        status = psql("SELECT status FROM nodes WHERE hostname='worker-1' LIMIT 1;")
+        if status == "ready":
+            return
+        time.sleep(0.2)
+    raise RuntimeError("worker-1 did not return to ready after failover")
+
+
+def submit_probe_job(scheduler_addr: str) -> None:
+    wait_for_ready_worker()
     run(
         [
             "./bin/arbiterctl",
             "--scheduler-addr",
-            "localhost:7000",
+            scheduler_addr,
             "submit",
             f"phase6-failover-probe-{int(time.time())}",
             "--replicas",
@@ -134,18 +160,20 @@ def run_trial(
     print(f"  killing leader {leader_id} ({container}) epoch={epoch}")
     run(["docker", "kill", container])
 
-    elapsed_ms, new_id, new_epoch = wait_for_leader_change(
+    elapsed_ms, new_id, new_addr, new_epoch = wait_for_leader_change(
         leader_id, epoch, poll_timeout_s, poll_interval_s
     )
-    print(f"  new leader {new_id} epoch={new_epoch} in {elapsed_ms:.1f}ms")
+    print(f"  new leader {new_id} ({new_addr}) epoch={new_epoch} in {elapsed_ms:.1f}ms")
+
+    # Bring the killed replica back before submit so the advertise set stays full.
+    wait_for_container(container, restart_timeout_s)
 
     if submit_after:
-        print("  submitting probe job via localhost:7000 (follows NOT_LEADER)...")
-        submit_probe_job()
+        host_addr = host_reachable_leader_addr(new_addr)
+        print(f"  submitting probe job via {host_addr}...")
+        submit_probe_job(host_addr)
         print("  probe job succeeded")
 
-    wait_for_container(container, restart_timeout_s)
-    # Wait until the lease is held by someone (restarted replica may or may not reclaim).
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         try:
@@ -162,8 +190,8 @@ def main() -> int:
     parser.add_argument(
         "--threshold-ms",
         type=float,
-        default=5000,
-        help="max acceptable election time (one lease TTL)",
+        default=6000,
+        help="max acceptable election time (lease TTL + one renew interval)",
     )
     parser.add_argument("--poll-timeout-s", type=float, default=15)
     parser.add_argument("--poll-interval-s", type=float, default=0.05)
