@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -39,9 +40,16 @@ func main() {
 	cpuCapacityMillicores := flag.Int64("cpu-capacity-millicores", 1000, "simulated CPU capacity for this node, in millicores")
 	memCapacityMB := flag.Int64("mem-capacity-mb", 512, "simulated memory capacity for this node, in megabytes")
 	httpAddr := flag.String("http-addr", ":8081", "address for the HTTP server (/healthz, later /metrics)")
+	labelsFlag := flag.String("labels", "", "comma-separated node labels as key=value pairs (e.g. zone=a,gpu=true)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+	labels, err := parseLabels(*labelsFlag)
+	if err != nil {
+		logger.Error("invalid --labels", "error", err)
+		os.Exit(1)
+	}
 
 	resolvedHostname := *hostname
 	if resolvedHostname == "" {
@@ -65,6 +73,7 @@ func main() {
 		"cpu_capacity_millicores", *cpuCapacityMillicores,
 		"mem_capacity_mb", *memCapacityMB,
 		"http_addr", *httpAddr,
+		"labels", labels,
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -100,7 +109,7 @@ func main() {
 			CpuMillicores: *cpuCapacityMillicores,
 			MemoryMb:      *memCapacityMB,
 		},
-		Labels: map[string]string{},
+		Labels: labels,
 	}
 	regResp, err := registerWithRetry(ctx, logger, client, registerReq)
 	if err != nil {
@@ -307,4 +316,23 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func parseLabels(raw string) (map[string]string, error) {
+	out := map[string]string{}
+	if raw == "" {
+		return out, nil
+	}
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		key, val, ok := strings.Cut(part, "=")
+		if !ok || key == "" {
+			return nil, fmt.Errorf("invalid label %q (want key=value)", part)
+		}
+		out[key] = val
+	}
+	return out, nil
 }

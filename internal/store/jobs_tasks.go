@@ -76,6 +76,7 @@ type TaskWithJob struct {
 	MemRequestMB         int64
 	RetryLimit           int32
 	SchedulingPolicy     string
+	Constraints          map[string]string
 }
 
 // CreateJobParams is the input to CreateJob.
@@ -254,7 +255,7 @@ func (s *Store) ClaimPendingTasksForScheduling(ctx context.Context, limit int) (
 	const q = `
 		SELECT t.id, t.job_id, t.status, t.assigned_node_id, t.assigned_epoch, t.retries_used, t.exit_code, t.last_error,
 		       t.created_at, t.scheduled_at, t.started_at, t.finished_at,
-		       j.image, j.command, j.cpu_request_mc, j.mem_request_mb, j.retry_limit, j.scheduling_policy
+		       j.image, j.command, j.cpu_request_mc, j.mem_request_mb, j.retry_limit, j.scheduling_policy, j.constraints
 		FROM tasks t
 		JOIN jobs j ON j.id = t.job_id
 		WHERE t.status = $1
@@ -369,7 +370,7 @@ func (s *Store) ListScheduledTasksForNode(ctx context.Context, nodeID string) ([
 	const q = `
 		SELECT t.id, t.job_id, t.status, t.assigned_node_id, t.assigned_epoch, t.retries_used, t.exit_code, t.last_error,
 		       t.created_at, t.scheduled_at, t.started_at, t.finished_at,
-		       j.image, j.command, j.cpu_request_mc, j.mem_request_mb, j.retry_limit, j.scheduling_policy
+		       j.image, j.command, j.cpu_request_mc, j.mem_request_mb, j.retry_limit, j.scheduling_policy, j.constraints
 		FROM tasks t
 		JOIN jobs j ON j.id = t.job_id
 		WHERE t.assigned_node_id = $1 AND t.status = $2
@@ -525,12 +526,20 @@ func scanTask(row rowScanner) (*Task, error) {
 
 func scanTaskWithJob(row rowScanner) (*TaskWithJob, error) {
 	var twj TaskWithJob
+	var constraintsRaw []byte
 	if err := row.Scan(
 		&twj.ID, &twj.JobID, &twj.Status, &twj.AssignedNodeID, &twj.AssignedEpoch, &twj.RetriesUsed,
 		&twj.ExitCode, &twj.LastError, &twj.CreatedAt, &twj.ScheduledAt, &twj.StartedAt, &twj.FinishedAt,
 		&twj.Image, &twj.Command, &twj.CPURequestMillicores, &twj.MemRequestMB, &twj.RetryLimit, &twj.SchedulingPolicy,
+		&constraintsRaw,
 	); err != nil {
 		return nil, err
+	}
+	if err := json.Unmarshal(constraintsRaw, &twj.Constraints); err != nil {
+		return nil, fmt.Errorf("unmarshal constraints: %w", err)
+	}
+	if twj.Constraints == nil {
+		twj.Constraints = map[string]string{}
 	}
 	return &twj, nil
 }

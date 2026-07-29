@@ -10,7 +10,7 @@ leader election, fencing/fault-tolerance design, gRPC API, milestones, and bench
 lives in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). A quick-reference architecture summary
 with diagrams is in [`docs/architecture.md`](docs/architecture.md).
 
-**Status:** Phase 3 (task submission, queue, naive first-fit scheduling) — see
+**Status:** Phase 4 (bin-packing & pluggable scheduling policies) — see
 [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) Section 8 for the full milestone list.
 
 ## Tech Stack
@@ -62,6 +62,11 @@ docker exec arbiter-postgres psql -U arbiter -d arbiter -c "SELECT hostname, add
 # Phase 3 DoD: submit 5 replicas and wait for all to succeed
 make build
 ./bin/arbiterctl submit demo --replicas 5 --wait
+
+# Phase 4: 5-worker cluster + bin_pack vs spread placement comparison
+make phase4-up
+python3 scripts/load_test.py --replicas 100 --cpu-millicores 50 --policy bin_pack
+python3 scripts/load_test.py --replicas 100 --cpu-millicores 50 --policy spread
 
 # Tear down
 make down

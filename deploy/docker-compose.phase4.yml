@@ -1,0 +1,104 @@
+# Phase 4 overlay: 5 equal-capacity workers for bin-pack vs spread comparison.
+# Usage:
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.phase4.yml up -d --build
+#   make phase4-up
+#
+# The base compose file already defines worker-1 (service name `worker`).
+# This overlay adds workers 2–5 with the same 2000m CPU / 1024MB capacity.
+
+services:
+  worker-2:
+    build:
+      context: ..
+      dockerfile: Dockerfile.worker
+    container_name: arbiter-worker-2
+    restart: unless-stopped
+    environment:
+      ARBITER_SCHEDULER_ADDR: scheduler:7000
+      DOCKER_HOST: unix:///var/run/docker.sock
+    command:
+      - "--hostname=worker-2"
+      - "--cpu-capacity-millicores=2000"
+      - "--mem-capacity-mb=1024"
+      - "--http-addr=:8082"
+    ports:
+      - "8082:8082"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      scheduler:
+        condition: service_healthy
+      workload:
+        condition: service_completed_successfully
+
+  worker-3:
+    build:
+      context: ..
+      dockerfile: Dockerfile.worker
+    container_name: arbiter-worker-3
+    restart: unless-stopped
+    environment:
+      ARBITER_SCHEDULER_ADDR: scheduler:7000
+      DOCKER_HOST: unix:///var/run/docker.sock
+    command:
+      - "--hostname=worker-3"
+      - "--cpu-capacity-millicores=2000"
+      - "--mem-capacity-mb=1024"
+      - "--http-addr=:8083"
+    ports:
+      - "8083:8083"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      scheduler:
+        condition: service_healthy
+      workload:
+        condition: service_completed_successfully
+
+  worker-4:
+    build:
+      context: ..
+      dockerfile: Dockerfile.worker
+    container_name: arbiter-worker-4
+    restart: unless-stopped
+    environment:
+      ARBITER_SCHEDULER_ADDR: scheduler:7000
+      DOCKER_HOST: unix:///var/run/docker.sock
+    command:
+      - "--hostname=worker-4"
+      - "--cpu-capacity-millicores=2000"
+      - "--mem-capacity-mb=1024"
+      - "--http-addr=:8084"
+    ports:
+      - "8084:8084"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      scheduler:
+        condition: service_healthy
+      workload:
+        condition: service_completed_successfully
+
+  worker-5:
+    build:
+      context: ..
+      dockerfile: Dockerfile.worker
+    container_name: arbiter-worker-5
+    restart: unless-stopped
+    environment:
+      ARBITER_SCHEDULER_ADDR: scheduler:7000
+      DOCKER_HOST: unix:///var/run/docker.sock
+    command:
+      - "--hostname=worker-5"
+      - "--cpu-capacity-millicores=2000"
+      - "--mem-capacity-mb=1024"
+      - "--http-addr=:8085"
+    ports:
+      - "8085:8085"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      scheduler:
+        condition: service_healthy
+      workload:
+        condition: service_completed_successfully

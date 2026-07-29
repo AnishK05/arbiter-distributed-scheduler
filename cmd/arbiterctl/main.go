@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -56,14 +57,15 @@ func newVersionCmd() *cobra.Command {
 
 func newSubmitCmd(schedulerAddr *string) *cobra.Command {
 	var (
-		image    string
-		command  []string
-		replicas int32
-		cpuMC    int64
-		memMB    int64
-		policy   string
-		wait     bool
-		waitFor  time.Duration
+		image        string
+		command      []string
+		replicas     int32
+		cpuMC        int64
+		memMB        int64
+		policy       string
+		constraints  []string
+		wait         bool
+		waitFor      time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -80,6 +82,11 @@ func newSubmitCmd(schedulerAddr *string) *cobra.Command {
 			}
 			defer func() { _ = conn.Close() }()
 
+			constraintMap, err := parseKeyValues(constraints)
+			if err != nil {
+				return err
+			}
+
 			job, err := client.SubmitJob(ctx, &arbiterv1.SubmitJobRequest{
 				Name:    args[0],
 				Image:   image,
@@ -90,12 +97,13 @@ func newSubmitCmd(schedulerAddr *string) *cobra.Command {
 				},
 				Replicas:         replicas,
 				SchedulingPolicy: policy,
+				Constraints:      constraintMap,
 			})
 			if err != nil {
 				return fmt.Errorf("submit job: %w", err)
 			}
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "submitted job %s (%s) replicas=%d image=%s\n",
-				job.GetName(), job.GetId(), job.GetReplicas(), job.GetImage()); err != nil {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "submitted job %s (%s) replicas=%d image=%s policy=%s\n",
+				job.GetName(), job.GetId(), job.GetReplicas(), job.GetImage(), job.GetSchedulingPolicy()); err != nil {
 				return err
 			}
 
@@ -107,11 +115,12 @@ func newSubmitCmd(schedulerAddr *string) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&image, "image", "arbiter-workload:latest", "container image for each task")
-	cmd.Flags().StringArrayVar(&command, "command", nil, "container command (repeatable); default is the image ENTRYPOINT")
+	cmd.Flags().StringArrayVar(&command, "command", nil, "container command (repeatable); default is the image ENTRYPOINT/CMD")
 	cmd.Flags().Int32Var(&replicas, "replicas", 1, "number of task replicas")
 	cmd.Flags().Int64Var(&cpuMC, "cpu-millicores", 100, "CPU request per task, in millicores")
 	cmd.Flags().Int64Var(&memMB, "memory-mb", 64, "memory request per task, in megabytes")
-	cmd.Flags().StringVar(&policy, "scheduling-policy", "bin_pack", "scheduling policy (bin_pack|spread); Phase 3 uses first-fit regardless")
+	cmd.Flags().StringVar(&policy, "scheduling-policy", "bin_pack", "scheduling policy (bin_pack|spread)")
+	cmd.Flags().StringArrayVar(&constraints, "constraint", nil, "node label selector as key=value (repeatable; AND semantics)")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until all tasks reach a terminal status")
 	cmd.Flags().DurationVar(&waitFor, "wait-timeout", 2*time.Minute, "max time to wait when --wait is set")
 	return cmd
@@ -297,6 +306,18 @@ func shortID(id string) string {
 		return id[:8]
 	}
 	return id
+}
+
+func parseKeyValues(pairs []string) (map[string]string, error) {
+	out := make(map[string]string, len(pairs))
+	for _, p := range pairs {
+		key, val, ok := strings.Cut(p, "=")
+		if !ok || key == "" {
+			return nil, fmt.Errorf("invalid key=value %q", p)
+		}
+		out[key] = val
+	}
+	return out, nil
 }
 
 func envOr(key, fallback string) string {

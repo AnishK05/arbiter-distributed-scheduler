@@ -100,3 +100,21 @@ here whenever a phase's plan says "pick one, document the choice" or similar.
   the worker container on the same daemon. The compose stack builds `arbiter-workload:latest` via a
   one-shot `workload` service (ENTRYPOINT overridden to `true`) before the worker starts, so the
   default demo image is always present for `arbiterctl submit`.
+
+## Phase 4
+
+- **Placement is Filter → Score (Kubernetes-style), not first-fit.** Hard filters
+  (`ReadyFilter`, `ResourceFilter`, `LabelSelectorFilter`) eliminate ineligible nodes; a per-job
+  scorer ranks the rest. `scheduling_policy=bin_pack` (default) prefers the node that would be
+  fullest after placement; `spread` prefers the currently least-utilized node. Tie-breaks use
+  hostname ascending for determinism.
+- **Job constraints are a nodeSelector-style AND map** (`map[string]string` on the job, exposed as
+  `arbiterctl submit --constraint key=value`). Workers accept `--labels key=value,...` at
+  registration so label filtering is exercisable without a schema change.
+- **In-tick allocation accounting is mandatory for correctness.** `GetNodeAllocations` alone is not
+  enough inside one scheduling batch — each successful `Place` updates a local `pendingAlloc` map
+  before the next task is considered, so a single tick cannot overcommit a node. Unit tests cover
+  both the no-overcommit invariant and the bin_pack-fills-first / spread-even distributions.
+- **Phase 4 DoD cluster is a compose overlay, not the full demo file.**
+  `deploy/docker-compose.phase4.yml` adds workers 2–5 beside the base stack (`make phase4-up`).
+  The 10-worker `docker-compose.demo.yml` remains a Phase 10 deliverable.

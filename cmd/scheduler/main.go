@@ -89,7 +89,7 @@ func main() {
 
 	sched := scheduler.New(db, logger)
 	go sched.Run(ctx)
-	logger.Info("scheduling loop started", "policy", "first_fit")
+	logger.Info("scheduling loop started", "policy", "filter_score")
 
 	grpcServer := grpc.NewServer()
 	server := grpcapi.New(db, rdb, int32(*heartbeatIntervalMS))
