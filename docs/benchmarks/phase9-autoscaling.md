@@ -30,21 +30,58 @@ make build
 
 Only containers/nodes labeled autoscaled are reclaimed; `arbiter-worker-1` is never removed.
 
-## DoD run (fill after stack exercise)
+## DoD run (2026-07-29)
 
-```bash
-# Burst that exceeds a single 2000m worker so pending stays elevated
+Cluster: `make phase9-up` (leader on `:8087` / `scheduler-3`).
+
+### Burst
+
+```text
 ./bin/arbiterctl submit burst --replicas 40 --cpu-millicores 200 --memory-mb 64 --command 30
-
-# Watch scale-up
-watch -n2 'curl -s http://localhost:8080/api/v1/nodes | python3 -c "import sys,json; ns=json.load(sys.stdin)[\"nodes\"];
-print([(n[\"hostname\"], n[\"status\"]) for n in ns if n[\"status\"]!=\"dead\"])"'
-
-curl -s 'http://localhost:8080/api/v1/events?limit=20' | python3 -c "import sys,json; 
-[print(e['EventType'], e['Message'][:90]) for e in json.load(sys.stdin)['events'] if 'scale' in e['EventType'] or 'cordon' in e['EventType']]"
-
-# After jobs finish, wait idle window → scale-down
-curl -s http://localhost:8080/metrics | grep arbiter_scale_
+# → pending queue stayed ≥3 while worker-1 saturated at 10×200m running
 ```
 
-_Results from the live DoD exercise will be appended below after `make phase9-up`._
+### Scale-up
+
+After the 8s sustain window:
+
+```text
+arbiter_scale_up_total = 1 → 2
+arbiter-worker-auto-1 / worker-auto-2 registered ready
+running tasks rose from 10 → 20 (autoscaled workers took load)
+```
+
+Events:
+
+```text
+node_scaled_up   autoscaler scaled up: launched worker-auto-1 …
+node_registered  hostname=worker-auto-1 …
+node_scaled_up   autoscaler scaled up: launched worker-auto-2 …
+```
+
+### Scale-down (idle reclaim)
+
+After the burst drained and autoscaled nodes stayed at zero allocation ≥20s:
+
+```text
+arbiter_scale_down_total = 2
+node_cordoned / node_scaled_down for worker-auto-1 and worker-auto-2
+docker ps: only arbiter-worker-1 remains (static compose worker untouched)
+```
+
+### Grafana / metrics
+
+```text
+arbiter_scale_up_total 2
+arbiter_scale_down_total 2
+```
+
+Panels: Cluster Overview → “Autoscaler Scale Events”; dashboard **Arbiter Autoscaling**.
+
+## Checklist
+
+- [x] Sustained burst triggers extra worker(s)
+- [x] New workers take tasks (running count increases)
+- [x] Idle period reclaims autoscaled workers
+- [x] Visible in `events` and Prometheus/Grafana
+- [x] Static `arbiter-worker-1` not removed
