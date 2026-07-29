@@ -58,7 +58,7 @@ func TestRegisterNodeValidation(t *testing.T) {
 		},
 	}
 
-	s := New(nil, nil, 500)
+	s := New(nil, nil, 500, nil)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := s.RegisterNode(context.Background(), tt.req)

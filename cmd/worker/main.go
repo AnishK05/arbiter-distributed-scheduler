@@ -1,7 +1,7 @@
 // Command worker is the Arbiter worker-agent binary that runs on every
 // cluster node (simulated as a container in the demo cluster). As of
-// Phase 3 it registers with the scheduler, sends heartbeats, receives task
-// assignments, and executes them as Docker containers.
+// Phase 6 it follows NOT_LEADER redirects and rotates across a configured
+// list of scheduler addresses when the current leader is unreachable.
 package main
 
 import (
@@ -22,9 +22,12 @@ import (
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/buildinfo"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/executor"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/health"
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/leaderclient"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -34,7 +37,8 @@ const (
 )
 
 func main() {
-	schedulerAddr := flag.String("scheduler-addr", envOr("ARBITER_SCHEDULER_ADDR", "localhost:7000"), "gRPC address of the scheduler's ClusterControl service")
+	schedulerAddr := flag.String("scheduler-addr", envOr("ARBITER_SCHEDULER_ADDR", "localhost:7000"), "primary gRPC address of a scheduler replica")
+	schedulerAddrs := flag.String("scheduler-addrs", envOr("ARBITER_SCHEDULER_ADDRS", ""), "comma-separated scheduler addresses to rotate through on failover (defaults to --scheduler-addr)")
 	hostname := flag.String("hostname", "", "hostname this node advertises to the scheduler (defaults to os.Hostname())")
 	address := flag.String("address", "", "address this node advertises to the scheduler (defaults to '<hostname><http-addr>')")
 	cpuCapacityMillicores := flag.Int64("cpu-capacity-millicores", 1000, "simulated CPU capacity for this node, in millicores")
@@ -64,12 +68,19 @@ func main() {
 		resolvedAddress = fmt.Sprintf("%s%s", resolvedHostname, *httpAddr)
 	}
 
+	addrs := parseAddrList(*schedulerAddrs)
+	if len(addrs) == 0 {
+		addrs = []string{*schedulerAddr}
+	} else if !containsAddr(addrs, *schedulerAddr) {
+		addrs = append([]string{*schedulerAddr}, addrs...)
+	}
+
 	logger.Info("arbiter-worker starting",
 		"version", buildinfo.Version,
 		"commit", buildinfo.Commit,
 		"hostname", resolvedHostname,
 		"address", resolvedAddress,
-		"scheduler_addr", *schedulerAddr,
+		"scheduler_addrs", addrs,
 		"cpu_capacity_millicores", *cpuCapacityMillicores,
 		"mem_capacity_mb", *memCapacityMB,
 		"http_addr", *httpAddr,
@@ -79,18 +90,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	conn, err := grpc.NewClient(*schedulerAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		logger.Error("failed to create gRPC client for scheduler", "error", err)
-		os.Exit(1)
-	}
-	defer func() { _ = conn.Close() }()
-
-	client := arbiterv1.NewClusterControlClient(conn)
+	dialer := newSchedulerDialer(logger, addrs)
+	defer dialer.Close()
 
 	agent := &workerAgent{
 		logger: logger,
-		client: client,
+		dialer: dialer,
 		specs:  make(map[string]executor.TaskSpec),
 	}
 
@@ -111,7 +116,7 @@ func main() {
 		},
 		Labels: labels,
 	}
-	regResp, err := registerWithRetry(ctx, logger, client, registerReq)
+	regResp, err := registerWithRetry(ctx, logger, dialer, registerReq)
 	if err != nil {
 		logger.Error("failed to register with scheduler", "error", err)
 		os.Exit(1)
@@ -120,6 +125,7 @@ func main() {
 		"node_id", regResp.GetNodeId(),
 		"epoch", regResp.GetEpoch(),
 		"heartbeat_interval_ms", regResp.GetHeartbeatIntervalMs(),
+		"scheduler_addr", dialer.Addr(),
 	)
 
 	go agent.runHeartbeatLoop(ctx, registerReq, regResp)
@@ -150,9 +156,110 @@ func main() {
 	logger.Info("arbiter-worker stopped")
 }
 
+// schedulerDialer owns the current gRPC connection, follows NOT_LEADER
+// redirects, and rotates across configured replica addresses on Unavailable.
+type schedulerDialer struct {
+	logger *slog.Logger
+	addrs  []string
+
+	mu     sync.Mutex
+	idx    int
+	addr   string
+	conn   *grpc.ClientConn
+	client arbiterv1.ClusterControlClient
+}
+
+func newSchedulerDialer(logger *slog.Logger, addrs []string) *schedulerDialer {
+	return &schedulerDialer{logger: logger, addrs: addrs, addr: addrs[0]}
+}
+
+func (d *schedulerDialer) Addr() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.addr
+}
+
+func (d *schedulerDialer) Client() (arbiterv1.ClusterControlClient, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.client != nil {
+		return d.client, nil
+	}
+	return d.redialLocked(d.addr)
+}
+
+func (d *schedulerDialer) FollowRedirect(err error) bool {
+	addr, ok := leaderclient.ParseLeaderAddr(err)
+	if !ok {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if addr == d.addr && d.client != nil {
+		return true
+	}
+	d.logger.Info("following NOT_LEADER redirect", "from", d.addr, "to", addr)
+	if _, dialErr := d.redialLocked(addr); dialErr != nil {
+		d.logger.Warn("failed to dial redirected leader", "addr", addr, "error", dialErr)
+		return false
+	}
+	return true
+}
+
+// RecoverFromUnavailable rotates to the next configured scheduler address.
+func (d *schedulerDialer) RecoverFromUnavailable(err error) bool {
+	if err == nil || status.Code(err) != codes.Unavailable {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.addrs) == 0 {
+		return false
+	}
+	d.idx = (d.idx + 1) % len(d.addrs)
+	target := d.addrs[d.idx]
+	d.logger.Info("current scheduler unreachable; rotating",
+		"from", d.addr, "to", target, "error", err)
+	if _, dialErr := d.redialLocked(target); dialErr != nil {
+		d.logger.Warn("failed to dial rotated scheduler", "addr", target, "error", dialErr)
+		return false
+	}
+	return true
+}
+
+func (d *schedulerDialer) redialLocked(addr string) (arbiterv1.ClusterControlClient, error) {
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, err
+	}
+	if d.conn != nil {
+		_ = d.conn.Close()
+	}
+	d.addr = addr
+	d.conn = conn
+	d.client = arbiterv1.NewClusterControlClient(conn)
+	for i, a := range d.addrs {
+		if a == addr {
+			d.idx = i
+			break
+		}
+	}
+	return d.client, nil
+}
+
+func (d *schedulerDialer) Close() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.conn != nil {
+		_ = d.conn.Close()
+		d.conn = nil
+		d.client = nil
+	}
+}
+
 type workerAgent struct {
 	logger *slog.Logger
-	client arbiterv1.ClusterControlClient
+	dialer *schedulerDialer
 	exec   *executor.Executor
 
 	mu     sync.Mutex
@@ -190,17 +297,44 @@ func (a *workerAgent) handleTaskDone(result executor.Result) {
 	nodeID, epoch := a.identity()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := a.client.ReportTaskStatus(ctx, &arbiterv1.TaskStatusUpdate{
-		TaskId:   result.TaskID,
-		Status:   result.Status,
-		ExitCode: result.ExitCode,
-		Error:    result.Error,
-		NodeId:   nodeID,
-		Epoch:    epoch,
-	})
-	if err != nil {
+	if err := a.withLeaderRetry(ctx, func(client arbiterv1.ClusterControlClient) error {
+		_, err := client.ReportTaskStatus(ctx, &arbiterv1.TaskStatusUpdate{
+			TaskId:   result.TaskID,
+			Status:   result.Status,
+			ExitCode: result.ExitCode,
+			Error:    result.Error,
+			NodeId:   nodeID,
+			Epoch:    epoch,
+		})
+		return err
+	}); err != nil {
 		a.logger.Warn("failed to report task status", "task_id", result.TaskID, "error", err)
 	}
+}
+
+func (a *workerAgent) withLeaderRetry(ctx context.Context, fn func(arbiterv1.ClusterControlClient) error) error {
+	for attempt := 0; attempt < 8; attempt++ {
+		client, err := a.dialer.Client()
+		if err != nil {
+			return err
+		}
+		err = fn(client)
+		if err == nil {
+			return nil
+		}
+		if a.dialer.FollowRedirect(err) {
+			continue
+		}
+		if a.dialer.RecoverFromUnavailable(err) {
+			continue
+		}
+		return err
+	}
+	client, err := a.dialer.Client()
+	if err != nil {
+		return err
+	}
+	return fn(client)
 }
 
 func (a *workerAgent) runHeartbeatLoop(ctx context.Context, registerReq *arbiterv1.RegisterNodeRequest, initial *arbiterv1.RegisterNodeResponse) {
@@ -224,13 +358,18 @@ func (a *workerAgent) runHeartbeatLoop(ctx context.Context, registerReq *arbiter
 			cpu, mem := a.exec.AllocatedResources(a.specs)
 			a.mu.Unlock()
 
-			resp, err := a.client.Heartbeat(ctx, &arbiterv1.HeartbeatRequest{
-				NodeId: nodeID,
-				Epoch:  epoch,
-				Allocated: &arbiterv1.NodeResources{
-					CpuMillicores: cpu,
-					MemoryMb:      mem,
-				},
+			var resp *arbiterv1.HeartbeatResponse
+			err := a.withLeaderRetry(ctx, func(client arbiterv1.ClusterControlClient) error {
+				var hbErr error
+				resp, hbErr = client.Heartbeat(ctx, &arbiterv1.HeartbeatRequest{
+					NodeId: nodeID,
+					Epoch:  epoch,
+					Allocated: &arbiterv1.NodeResources{
+						CpuMillicores: cpu,
+						MemoryMb:      mem,
+					},
+				})
+				return hbErr
 			})
 			if err != nil {
 				a.logger.Warn("heartbeat failed, will retry next interval", "node_id", nodeID, "error", err)
@@ -245,7 +384,7 @@ func (a *workerAgent) runHeartbeatLoop(ctx context.Context, registerReq *arbiter
 				a.specs = make(map[string]executor.TaskSpec)
 				a.mu.Unlock()
 
-				regResp, err := registerWithRetry(ctx, a.logger, a.client, registerReq)
+				regResp, err := registerWithRetry(ctx, a.logger, a.dialer, registerReq)
 				if err != nil {
 					a.logger.Error("failed to re-register after epoch invalidation", "error", err)
 					continue
@@ -301,11 +440,14 @@ func (a *workerAgent) handleAssignments(assignments []*arbiterv1.TaskAssignment)
 func (a *workerAgent) startAssignedTask(spec executor.TaskSpec) {
 	nodeID, epoch := a.identity()
 	reportCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	_, err := a.client.ReportTaskStatus(reportCtx, &arbiterv1.TaskStatusUpdate{
-		TaskId: spec.TaskID,
-		Status: "running",
-		NodeId: nodeID,
-		Epoch:  epoch,
+	err := a.withLeaderRetry(reportCtx, func(client arbiterv1.ClusterControlClient) error {
+		_, err := client.ReportTaskStatus(reportCtx, &arbiterv1.TaskStatusUpdate{
+			TaskId: spec.TaskID,
+			Status: "running",
+			NodeId: nodeID,
+			Epoch:  epoch,
+		})
+		return err
 	})
 	cancel()
 	if err != nil {
@@ -317,15 +459,23 @@ func (a *workerAgent) startAssignedTask(spec executor.TaskSpec) {
 	}
 }
 
-func registerWithRetry(ctx context.Context, logger *slog.Logger, client arbiterv1.ClusterControlClient, req *arbiterv1.RegisterNodeRequest) (*arbiterv1.RegisterNodeResponse, error) {
+func registerWithRetry(ctx context.Context, logger *slog.Logger, dialer *schedulerDialer, req *arbiterv1.RegisterNodeRequest) (*arbiterv1.RegisterNodeResponse, error) {
 	var lastErr error
 	for attempt := 1; attempt <= registerMaxAttempts; attempt++ {
-		resp, err := client.RegisterNode(ctx, req)
-		if err == nil {
-			return resp, nil
+		client, err := dialer.Client()
+		if err != nil {
+			lastErr = err
+		} else {
+			resp, err := client.RegisterNode(ctx, req)
+			if err == nil {
+				return resp, nil
+			}
+			lastErr = err
+			if dialer.FollowRedirect(err) || dialer.RecoverFromUnavailable(err) {
+				continue
+			}
 		}
-		lastErr = err
-		logger.Warn("scheduler not ready yet, retrying registration", "attempt", attempt, "max_attempts", registerMaxAttempts, "error", err)
+		logger.Warn("scheduler not ready yet, retrying registration", "attempt", attempt, "max_attempts", registerMaxAttempts, "error", lastErr)
 
 		select {
 		case <-ctx.Done():
@@ -360,4 +510,24 @@ func parseLabels(raw string) (map[string]string, error) {
 		out[key] = val
 	}
 	return out, nil
+}
+
+func parseAddrList(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func containsAddr(addrs []string, addr string) bool {
+	for _, a := range addrs {
+		if a == addr {
+			return true
+		}
+	}
+	return false
 }

@@ -69,8 +69,15 @@ services:
     environment:
       ARBITER_POSTGRES_URL: postgres://arbiter:arbiter@postgres:5432/arbiter?sslmode=disable
       ARBITER_REDIS_ADDR: redis:6379
+      ARBITER_REPLICA_ID: scheduler-1
+      # Compose DNS name so in-cluster workers can follow NOT_LEADER redirects
+      # if additional replicas are added via an overlay.
+      ARBITER_ADVERTISE_ADDR: scheduler:7000
       # Reap orphaned DooD task containers when a worker is marked dead (Phase 5).
       DOCKER_HOST: unix:///var/run/docker.sock
+    command:
+      - "--replica-id=scheduler-1"
+      - "--advertise-addr=scheduler:7000"
     ports:
       - "7000:7000"
       - "8080:8080"
@@ -86,7 +93,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-
   worker:
     build:
       context: ..

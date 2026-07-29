@@ -7,8 +7,8 @@
 // rationale). On dead, scheduled/running tasks are orphaned and requeued,
 // and leftover DooD task containers are reaped when a Docker client is set.
 //
-// This runs unconditionally on the sole scheduler replica for now; Phase 6
-// will gate it on "is the current leader" once multiple replicas exist.
+// Only the elected leader runs the detector; followers no-op each tick
+// (Phase 6). Pass a nil LeaderGate for always-leader (single-replica tests).
 package failuredetector
 
 import (
@@ -21,6 +21,11 @@ import (
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/dockerutil"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/store"
 )
+
+// LeaderGate reports whether this replica should evaluate node liveness.
+type LeaderGate interface {
+	IsLeader() bool
+}
 
 // Config holds the tunable thresholds, all derived by cmd/scheduler from a
 // single --heartbeat-interval-ms flag (plus missed-interval multipliers) so
@@ -55,21 +60,22 @@ type Detector struct {
 	docker *dockerutil.Client
 	logger *slog.Logger
 	cfg    Config
+	leader LeaderGate
 }
 
 // New constructs a Detector without Docker reaping (tests / hosts without a
 // socket). Prefer NewWithDocker in cmd/scheduler.
-func New(s *store.Store, c *cache.Client, logger *slog.Logger, cfg Config) *Detector {
-	return NewWithDocker(s, c, nil, logger, cfg)
+func New(s *store.Store, c *cache.Client, logger *slog.Logger, cfg Config, leader LeaderGate) *Detector {
+	return NewWithDocker(s, c, nil, logger, cfg, leader)
 }
 
 // NewWithDocker is like New but installs a Docker client used to force-remove
 // orphaned task containers after a node is marked dead.
-func NewWithDocker(s *store.Store, c *cache.Client, docker *dockerutil.Client, logger *slog.Logger, cfg Config) *Detector {
+func NewWithDocker(s *store.Store, c *cache.Client, docker *dockerutil.Client, logger *slog.Logger, cfg Config, leader LeaderGate) *Detector {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Detector{store: s, cache: c, docker: docker, logger: logger, cfg: cfg}
+	return &Detector{store: s, cache: c, docker: docker, logger: logger, cfg: cfg, leader: leader}
 }
 
 // Run blocks, polling every cfg.PollInterval until ctx is cancelled.
@@ -88,6 +94,9 @@ func (d *Detector) Run(ctx context.Context) {
 }
 
 func (d *Detector) tick(ctx context.Context) {
+	if d.leader != nil && !d.leader.IsLeader() {
+		return
+	}
 	nodes, err := d.store.ListActiveNodes(ctx)
 	if err != nil {
 		d.logger.Error("failuredetector: list active nodes", "error", err)

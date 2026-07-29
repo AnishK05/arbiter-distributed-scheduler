@@ -8,8 +8,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// Event types written by the node/failure-detector lifecycle (Phase 2) and
-// the job/task lifecycle (Phase 3). Leader event types land in Phase 6.
+// Event types written by the node/failure-detector lifecycle (Phase 2),
+// the job/task lifecycle (Phase 3), and leader election (Phase 6).
 const (
 	EventTypeNodeRegistered = "node_registered"
 	EventTypeNodeNotReady   = "node_not_ready"
@@ -24,13 +24,16 @@ const (
 	EventTypeTaskOrphaned       = "task_orphaned"
 	EventTypeTaskRequeued       = "task_requeued"
 	EventTypeTaskRetryScheduled = "task_retry_scheduled"
+
+	EventTypeLeaderElected = "leader_elected"
 )
 
 // Entity types used in the events table's entity_type column.
 const (
-	EntityTypeNode = "node"
-	EntityTypeJob  = "job"
-	EntityTypeTask = "task"
+	EntityTypeNode   = "node"
+	EntityTypeJob    = "job"
+	EntityTypeTask   = "task"
+	EntityTypeLeader = "leader"
 )
 
 // Event mirrors a row in the `events` audit-trail table

@@ -124,7 +124,7 @@ sequenceDiagram
 | `cmd/arbiterctl` | CLI client |
 | `internal/grpcapi` | gRPC service implementations for `ClusterControl` / `SchedulerAPI` |
 | `internal/scheduler` | Placement engine (filter/score, queue, retry) — Phase 3+ |
-| `internal/election` | Leader election (Postgres lease + fencing) — Phase 6 |
+| `internal/election` | Leader election (Postgres lease + fencing epochs) |
 | `internal/failuredetector` | Heartbeat-timeout tracking — Phase 2 |
 | `internal/store` | Postgres repositories — Phase 1+ |
 | `internal/cache` | Redis client wrappers — Phase 2+ |
@@ -134,7 +134,7 @@ sequenceDiagram
 | `proto/` | `.proto` service/message definitions + buf config |
 | `migrations/` | SQL schema migrations |
 | `dashboard/` | Next.js + TypeScript web UI — Phase 8 |
-| `scripts/` | Python tooling: load-test harness, chaos monkey, example workloads |
+| `scripts/` | Python tooling: load-test, chaos monkey, failover measurement |
 | `deploy/` | Docker Compose stacks, Prometheus/Grafana config |
 | `docs/` | This doc, design-decision notes, and archived benchmark output |
 
