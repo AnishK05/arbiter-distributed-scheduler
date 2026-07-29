@@ -1,14 +1,19 @@
 # Local dev stack: Postgres + Redis, plus one scheduler replica and one
-# worker node — enough to exercise node registration, heartbeats, and
-# failure detection end to end (Phases 1-2). Additional scheduler replicas
-# (leader election, Phase 6) and more workers (bin-packing/chaos testing,
-# Phase 4+) are added via a separate docker-compose.demo.yml once those
-# phases land; see IMPLEMENTATION_PLAN.md Section 5 & 8.
+# worker node — enough to exercise node registration, heartbeats, failure
+# detection, and task execution end to end (Phases 1-3). Additional
+# scheduler replicas (leader election, Phase 6) and more workers
+# (bin-packing/chaos testing, Phase 4+) are added via a separate
+# docker-compose.demo.yml once those phases land; see
+# IMPLEMENTATION_PLAN.md Section 5 & 8.
 #
 # Usage: `make up` / `make down`, or `docker compose -f deploy/docker-compose.yml up`.
 # `make run-scheduler` / `make run-worker` remain available for running
 # either binary directly on the host (e.g. for faster edit/rebuild cycles)
 # against the Dockerized Postgres/Redis instead.
+#
+# The worker mounts the host Docker socket so it can launch sibling task
+# containers (Docker-out-of-Docker). The `workload` service builds the
+# `arbiter-workload:latest` image onto that same daemon for tasks to use.
 
 services:
   postgres:
@@ -41,6 +46,18 @@ services:
       timeout: 5s
       retries: 10
 
+  # Build-only service: produces arbiter-workload:latest on the host Docker
+  # daemon so workers can launch sibling task containers from it. Exits
+  # immediately after the image is built (`restart: "no"`).
+  workload:
+    build:
+      context: ..
+      dockerfile: Dockerfile.workload
+    image: arbiter-workload:latest
+    container_name: arbiter-workload-build
+    command: ["true"]
+    restart: "no"
+
   scheduler:
     build:
       context: ..
@@ -72,15 +89,21 @@ services:
     restart: unless-stopped
     environment:
       ARBITER_SCHEDULER_ADDR: scheduler:7000
+      # Talk to the host Docker daemon (sibling containers for tasks).
+      DOCKER_HOST: unix:///var/run/docker.sock
     command:
       - "--hostname=worker-1"
-      - "--cpu-capacity-millicores=1000"
-      - "--mem-capacity-mb=512"
+      - "--cpu-capacity-millicores=2000"
+      - "--mem-capacity-mb=1024"
     ports:
       - "8081:8081"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       scheduler:
         condition: service_healthy
+      workload:
+        condition: service_completed_successfully
 
 volumes:
   arbiter-postgres-data:

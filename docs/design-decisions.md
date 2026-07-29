@@ -76,3 +76,22 @@ here whenever a phase's plan says "pick one, document the choice" or similar.
   fence.
 - **`github.com/redis/go-redis/v9` is pinned to `v9.6.1`**, for the same reason as the Phase 1
   Postgres-related pins: its latest release requires a newer Go version than this project targets.
+
+## Phase 3
+
+- **Task resource requests live on the parent `jobs` row, not on each `tasks` row.** Replicas of a
+  job always share the same image/command/CPU/memory request; joining `tasks`↔`jobs` for scheduling
+  and assignment avoids duplicating those columns N times and keeps `SubmitJob` as the single place
+  that validates them. Phase 4's Filter/Scorer plugins consume the same joined `TaskWithJob` view.
+- **Phase 3 placement is naive first-fit** (first `ready` node with enough residual CPU+memory),
+  regardless of the job's stored `scheduling_policy`. The field is persisted and accepted by
+  `SubmitJob` so Phase 4 can wire `bin_pack` / `spread` scorers without a schema or API change.
+- **Docker task execution talks to the Engine HTTP API over the unix socket**, not the
+  `github.com/docker/docker` Go SDK. The SDK's current releases pull OpenTelemetry exporters that
+  require Go ≥ 1.25, which is past this project's pinned `go 1.22.2` toolchain. The executor only
+  needs create/start/wait/kill/remove — a thin `net/http` + unix-dial client is enough and keeps
+  `go.mod` free of that dependency tree.
+- **Workers mount the host Docker socket (Docker-out-of-Docker)** so task containers are siblings of
+  the worker container on the same daemon. The compose stack builds `arbiter-workload:latest` via a
+  one-shot `workload` service before the worker starts, so the default demo image is always present
+  for `arbiterctl submit`.

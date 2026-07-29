@@ -1,7 +1,7 @@
-// Command worker is the Arbiter worker-agent binary that will run on every
+// Command worker is the Arbiter worker-agent binary that runs on every
 // cluster node (simulated as a container in the demo cluster). As of
-// Phase 2 it registers itself with the scheduler on startup and then sends
-// periodic heartbeats; task execution is added starting Phase 3.
+// Phase 3 it registers with the scheduler, sends heartbeats, receives task
+// assignments, and executes them as Docker containers.
 package main
 
 import (
@@ -13,11 +13,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	arbiterv1 "github.com/AnishK05/arbiter-distributed-scheduler/gen/arbiter/v1"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/buildinfo"
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/executor"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/health"
 
 	"google.golang.org/grpc"
@@ -25,8 +27,9 @@ import (
 )
 
 const (
-	registerMaxAttempts = 15
-	registerRetryDelay  = 2 * time.Second
+	registerMaxAttempts      = 15
+	registerRetryDelay       = 2 * time.Second
+	defaultHeartbeatInterval = 500 * time.Millisecond
 )
 
 func main() {
@@ -75,6 +78,21 @@ func main() {
 	defer func() { _ = conn.Close() }()
 
 	client := arbiterv1.NewClusterControlClient(conn)
+
+	agent := &workerAgent{
+		logger: logger,
+		client: client,
+		specs:  make(map[string]executor.TaskSpec),
+	}
+
+	exec, err := executor.New(agent.handleTaskDone)
+	if err != nil {
+		logger.Error("failed to initialize docker executor", "error", err)
+		os.Exit(1)
+	}
+	defer func() { _ = exec.Close() }()
+	agent.exec = exec
+
 	registerReq := &arbiterv1.RegisterNodeRequest{
 		Hostname: resolvedHostname,
 		Address:  resolvedAddress,
@@ -94,9 +112,8 @@ func main() {
 		"epoch", regResp.GetEpoch(),
 		"heartbeat_interval_ms", regResp.GetHeartbeatIntervalMs(),
 	)
-	logger.Info("task execution is not yet implemented (see IMPLEMENTATION_PLAN.md Phase 3+)")
 
-	go runHeartbeatLoop(ctx, logger, client, registerReq, regResp)
+	go agent.runHeartbeatLoop(ctx, registerReq, regResp)
 
 	httpServer := &http.Server{
 		Addr:              *httpAddr,
@@ -113,6 +130,7 @@ func main() {
 
 	<-ctx.Done()
 	logger.Info("shutdown signal received")
+	exec.StopAll()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -123,10 +141,142 @@ func main() {
 	logger.Info("arbiter-worker stopped")
 }
 
-// registerWithRetry guards against startup-ordering races (e.g. the worker
-// container starting around the same time as the scheduler in Docker
-// Compose) with a bounded retry loop, on top of the healthcheck-based
-// `depends_on` ordering already configured in deploy/docker-compose.yml.
+type workerAgent struct {
+	logger *slog.Logger
+	client arbiterv1.ClusterControlClient
+	exec   *executor.Executor
+
+	mu    sync.Mutex
+	specs map[string]executor.TaskSpec
+}
+
+func (a *workerAgent) handleTaskDone(result executor.Result) {
+	a.mu.Lock()
+	delete(a.specs, result.TaskID)
+	a.mu.Unlock()
+
+	a.logger.Info("task finished",
+		"task_id", result.TaskID,
+		"status", result.Status,
+		"exit_code", result.ExitCode,
+		"error", result.Error,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := a.client.ReportTaskStatus(ctx, &arbiterv1.TaskStatusUpdate{
+		TaskId:   result.TaskID,
+		Status:   result.Status,
+		ExitCode: result.ExitCode,
+		Error:    result.Error,
+	})
+	if err != nil {
+		a.logger.Warn("failed to report task status", "task_id", result.TaskID, "error", err)
+	}
+}
+
+func (a *workerAgent) runHeartbeatLoop(ctx context.Context, registerReq *arbiterv1.RegisterNodeRequest, initial *arbiterv1.RegisterNodeResponse) {
+	nodeID := initial.GetNodeId()
+	epoch := initial.GetEpoch()
+
+	interval := time.Duration(initial.GetHeartbeatIntervalMs()) * time.Millisecond
+	if interval <= 0 {
+		interval = defaultHeartbeatInterval
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.mu.Lock()
+			cpu, mem := a.exec.AllocatedResources(a.specs)
+			a.mu.Unlock()
+
+			resp, err := a.client.Heartbeat(ctx, &arbiterv1.HeartbeatRequest{
+				NodeId: nodeID,
+				Epoch:  epoch,
+				Allocated: &arbiterv1.NodeResources{
+					CpuMillicores: cpu,
+					MemoryMb:      mem,
+				},
+			})
+			if err != nil {
+				a.logger.Warn("heartbeat failed, will retry next interval", "node_id", nodeID, "error", err)
+				continue
+			}
+
+			if resp.GetEpochInvalid() {
+				a.logger.Warn("scheduler rejected this node's epoch (marked dead); stopping tasks and re-registering",
+					"node_id", nodeID, "epoch", epoch)
+				a.exec.StopAll()
+				a.mu.Lock()
+				a.specs = make(map[string]executor.TaskSpec)
+				a.mu.Unlock()
+
+				regResp, err := registerWithRetry(ctx, a.logger, a.client, registerReq)
+				if err != nil {
+					a.logger.Error("failed to re-register after epoch invalidation", "error", err)
+					continue
+				}
+				nodeID = regResp.GetNodeId()
+				epoch = regResp.GetEpoch()
+				a.logger.Info("re-registered with scheduler", "node_id", nodeID, "epoch", epoch)
+				continue
+			}
+
+			a.handleAssignments(ctx, resp.GetNewAssignments())
+		}
+	}
+}
+
+func (a *workerAgent) handleAssignments(ctx context.Context, assignments []*arbiterv1.TaskAssignment) {
+	for _, assignment := range assignments {
+		if a.exec.IsRunning(assignment.GetTaskId()) {
+			continue
+		}
+		spec := executor.TaskSpec{
+			TaskID:               assignment.GetTaskId(),
+			Image:                assignment.GetImage(),
+			Command:              assignment.GetCommand(),
+			CPURequestMillicores: assignment.GetRequest().GetCpuMillicores(),
+			MemRequestMB:         assignment.GetRequest().GetMemoryMb(),
+		}
+
+		a.mu.Lock()
+		a.specs[spec.TaskID] = spec
+		a.mu.Unlock()
+
+		a.logger.Info("received task assignment",
+			"task_id", spec.TaskID,
+			"image", spec.Image,
+			"cpu_mc", spec.CPURequestMillicores,
+			"mem_mb", spec.MemRequestMB,
+		)
+
+		// Report running as soon as we accept the assignment (before/while
+		// the container starts) so the control plane's resource accounting
+		// reflects the reservation promptly.
+		reportCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_, err := a.client.ReportTaskStatus(reportCtx, &arbiterv1.TaskStatusUpdate{
+			TaskId: spec.TaskID,
+			Status: "running",
+		})
+		cancel()
+		if err != nil {
+			a.logger.Warn("failed to report task running", "task_id", spec.TaskID, "error", err)
+		}
+
+		if err := a.exec.Start(ctx, spec); err != nil {
+			a.logger.Error("failed to start task container", "task_id", spec.TaskID, "error", err)
+			// onDone already reports failed for start errors.
+		}
+	}
+}
+
 func registerWithRetry(ctx context.Context, logger *slog.Logger, client arbiterv1.ClusterControlClient, req *arbiterv1.RegisterNodeRequest) (*arbiterv1.RegisterNodeResponse, error) {
 	var lastErr error
 	for attempt := 1; attempt <= registerMaxAttempts; attempt++ {
@@ -144,60 +294,6 @@ func registerWithRetry(ctx context.Context, logger *slog.Logger, client arbiterv
 		}
 	}
 	return nil, lastErr
-}
-
-const defaultHeartbeatInterval = 500 * time.Millisecond
-
-// runHeartbeatLoop sends a Heartbeat every regResp.HeartbeatIntervalMs until
-// ctx is cancelled. If the scheduler ever responds with epoch_invalid=true
-// (this node was declared dead — its epoch was bumped — likely because it
-// was unreachable behind a network partition for long enough), it
-// re-registers from scratch to obtain a fresh epoch rather than continuing
-// to heartbeat with a now-rejected one. See IMPLEMENTATION_PLAN.md
-// Section 6.5 for the fencing rationale; killing locally-running task
-// containers on invalidation is added once tasks exist (Phase 3+5).
-func runHeartbeatLoop(ctx context.Context, logger *slog.Logger, client arbiterv1.ClusterControlClient, registerReq *arbiterv1.RegisterNodeRequest, initial *arbiterv1.RegisterNodeResponse) {
-	nodeID := initial.GetNodeId()
-	epoch := initial.GetEpoch()
-
-	interval := time.Duration(initial.GetHeartbeatIntervalMs()) * time.Millisecond
-	if interval <= 0 {
-		interval = defaultHeartbeatInterval
-	}
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			resp, err := client.Heartbeat(ctx, &arbiterv1.HeartbeatRequest{
-				NodeId: nodeID,
-				Epoch:  epoch,
-				// No tasks exist yet (Phase 3+), so there's nothing
-				// allocated to report.
-				Allocated: &arbiterv1.NodeResources{CpuMillicores: 0, MemoryMb: 0},
-			})
-			if err != nil {
-				logger.Warn("heartbeat failed, will retry next interval", "node_id", nodeID, "error", err)
-				continue
-			}
-
-			if resp.GetEpochInvalid() {
-				logger.Warn("scheduler rejected this node's epoch (marked dead); re-registering", "node_id", nodeID, "epoch", epoch)
-				regResp, err := registerWithRetry(ctx, logger, client, registerReq)
-				if err != nil {
-					logger.Error("failed to re-register after epoch invalidation", "error", err)
-					continue
-				}
-				nodeID = regResp.GetNodeId()
-				epoch = regResp.GetEpoch()
-				logger.Info("re-registered with scheduler", "node_id", nodeID, "epoch", epoch)
-			}
-		}
-	}
 }
 
 func envOr(key, fallback string) string {

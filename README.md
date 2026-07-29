@@ -10,7 +10,7 @@ leader election, fencing/fault-tolerance design, gRPC API, milestones, and bench
 lives in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). A quick-reference architecture summary
 with diagrams is in [`docs/architecture.md`](docs/architecture.md).
 
-**Status:** Phase 2 (heartbeats & failure detection) — see
+**Status:** Phase 3 (task submission, queue, naive first-fit scheduling) — see
 [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) Section 8 for the full milestone list.
 
 ## Tech Stack
@@ -58,6 +58,10 @@ curl http://localhost:8080/healthz
 
 # Confirm the worker registered
 docker exec arbiter-postgres psql -U arbiter -d arbiter -c "SELECT hostname, address, status, epoch FROM nodes;"
+
+# Phase 3 DoD: submit 5 replicas and wait for all to succeed
+make build
+./bin/arbiterctl submit demo --replicas 5 --wait
 
 # Tear down
 make down

@@ -1,0 +1,13 @@
+# Tiny demo task image used as the default workload for submitted jobs.
+# Built onto the host Docker daemon so worker agents (which mount the host
+# Docker socket) can launch sibling containers from it.
+FROM python:3.12-alpine
+
+WORKDIR /workloads
+COPY scripts/workloads/sleep_n.py scripts/workloads/cpu_burn.py scripts/workloads/fail_n.py ./
+RUN chmod +x sleep_n.py cpu_burn.py fail_n.py
+
+# Default command: a short sleep, enough to observe pending → scheduled →
+# running → succeeded in the dashboard/CLI without making demos tedious.
+ENTRYPOINT ["python", "/workloads/sleep_n.py"]
+CMD ["2"]
