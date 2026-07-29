@@ -11,5 +11,6 @@ Python tooling (not core services — see `IMPLEMENTATION_PLAN.md` Section 3):
 - `chaos_monkey.py` (Phase 5) — kills/pauses worker containers via the Docker Engine API
   (`docker kill` / `docker pause` / `docker unpause`) to exercise failure detection, reassignment,
   and fencing.
-- `workloads/` (Phase 3) — trivial example programs (sleep, CPU-burn) baked into the default task
-  image so submitted tasks have something to actually execute.
+- `workloads/` (Phase 3) — trivial example programs (`sleep_n.py`, `cpu_burn.py`, `fail_n.py`) baked
+  into `arbiter-workload:latest` (`Dockerfile.workload`) so submitted tasks have something to
+  actually execute. Default ENTRYPOINT sleeps 2s and exits 0.

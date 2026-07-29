@@ -36,8 +36,8 @@ func testDB(t *testing.T) *store.Store {
 		t.Fatalf("connect for truncate: %v", err)
 	}
 	defer rawPool.Close()
-	if _, err := rawPool.Exec(context.Background(), "TRUNCATE nodes"); err != nil {
-		t.Fatalf("truncate nodes: %v", err)
+	if _, err := rawPool.Exec(context.Background(), "TRUNCATE tasks, jobs, events, nodes CASCADE"); err != nil {
+		t.Fatalf("truncate tables: %v", err)
 	}
 
 	db, err := store.Connect(context.Background(), connString)

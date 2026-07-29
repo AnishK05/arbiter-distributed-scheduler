@@ -1,8 +1,7 @@
-// Command scheduler is the Arbiter control-plane binary. In later phases it
-// hosts the placement engine and leader-election loop; as of Phase 2 it also
-// owns the Postgres connection/migrations, the Redis connection, and serves
-// RegisterNode + Heartbeat + ListNodes, backed by a background failure
-// detector.
+// Command scheduler is the Arbiter control-plane binary. As of Phase 3 it
+// owns the Postgres/Redis connections, serves RegisterNode + Heartbeat +
+// SubmitJob/List* RPCs, runs the failure detector, and runs the naive
+// first-fit scheduling loop.
 package main
 
 import (
@@ -23,6 +22,7 @@ import (
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/failuredetector"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/grpcapi"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/health"
+	"github.com/AnishK05/arbiter-distributed-scheduler/internal/scheduler"
 	"github.com/AnishK05/arbiter-distributed-scheduler/internal/store"
 
 	"google.golang.org/grpc"
@@ -57,9 +57,6 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Confirm Postgres is reachable (with retry, since it may still be
-	// starting up alongside us — e.g. in Docker Compose) before attempting
-	// migrations, which need a live connection themselves.
 	db, err := connectPostgresWithRetry(ctx, logger, *postgresURL)
 	if err != nil {
 		logger.Error("failed to connect to database", "error", err)
@@ -89,6 +86,10 @@ func main() {
 	)
 	detector := failuredetector.New(db, rdb, logger, detectorCfg)
 	go detector.Run(ctx)
+
+	sched := scheduler.New(db, logger)
+	go sched.Run(ctx)
+	logger.Info("scheduling loop started", "policy", "first_fit")
 
 	grpcServer := grpc.NewServer()
 	server := grpcapi.New(db, rdb, int32(*heartbeatIntervalMS))
@@ -136,10 +137,6 @@ func main() {
 	logger.Info("arbiter-scheduler stopped")
 }
 
-// connectPostgresWithRetry guards against startup-ordering races (e.g.
-// Docker Compose bringing the scheduler up around the same time as
-// Postgres) with a bounded retry loop, on top of the healthcheck-based
-// `depends_on` ordering already configured in deploy/docker-compose.yml.
 func connectPostgresWithRetry(ctx context.Context, logger *slog.Logger, postgresURL string) (*store.Store, error) {
 	var lastErr error
 	for attempt := 1; attempt <= dbConnectMaxAttempts; attempt++ {
@@ -159,7 +156,6 @@ func connectPostgresWithRetry(ctx context.Context, logger *slog.Logger, postgres
 	return nil, lastErr
 }
 
-// connectRedisWithRetry is connectPostgresWithRetry's counterpart for Redis.
 func connectRedisWithRetry(ctx context.Context, logger *slog.Logger, redisAddr string) (*cache.Client, error) {
 	var lastErr error
 	for attempt := 1; attempt <= redisConnectMaxAttempts; attempt++ {
