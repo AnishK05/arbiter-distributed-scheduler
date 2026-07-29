@@ -195,3 +195,16 @@ here whenever a phase's plan says "pick one, document the choice" or similar.
   remain after exit; orphan cleanup still removes stale containers on node death.
 - **Dashboard** is Next.js (App Router) on host port **3100** (`make phase8-up`) so it does not
   collide with Grafana on 3000. See `docs/benchmarks/phase8-dashboard.md`.
+
+## Phase 9
+
+- **Leader-only simulated autoscaler** (`internal/autoscaler`): when pending tasks stay above a
+  threshold for a sustained window, the leader launches an extra worker container via the Docker
+  Engine API (DooD). Containers are labeled `arbiter.autoscaled=true` and register with node label
+  `autoscaled=true`; only those workers are ever reclaimed. Compose-static workers are untouched.
+- **Scale-down**: an idle autoscaled node (zero allocation) is cordoned, its container removed, then
+  marked dead. Events: `node_scaled_up` / `node_cordoned` / `node_scaled_down`.
+- **Metrics**: `arbiter_scale_up_total`, `arbiter_scale_down_total`, `arbiter_autoscaled_workers`
+  plus Grafana panels on Cluster Overview and a dedicated **Arbiter Autoscaling** dashboard.
+- Enabled via `make phase9-up` (`ARBITER_AUTOSCALER=true` + thresholds). See
+  `docs/benchmarks/phase9-autoscaling.md`.

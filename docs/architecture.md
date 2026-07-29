@@ -126,6 +126,7 @@ sequenceDiagram
 | `internal/scheduler` | Placement engine (filter/score, queue, retry) — Phase 3+ |
 | `internal/election` | Leader election (Postgres lease + fencing epochs) |
 | `internal/failuredetector` | Heartbeat-timeout tracking |
+| `internal/autoscaler` | Leader-only simulated worker scale-up/down (Phase 9) |
 | `internal/metrics` | Prometheus collectors + /metrics handler |
 | `internal/store` | Postgres repositories — Phase 1+ |
 | `internal/cache` | Redis client wrappers — Phase 2+ |

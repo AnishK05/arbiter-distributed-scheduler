@@ -73,7 +73,7 @@ export default function HomePage() {
             return [...prev.slice(-80), ev];
           });
           // Light refresh when task/job events arrive so tables catch up quickly.
-          if (ev.EntityType === "task" || ev.EntityType === "job") {
+          if (ev.EntityType === "task" || ev.EntityType === "job" || ev.EntityType === "node") {
             void Promise.all([fetchTasks(), fetchJobs(), fetchNodes()]).then(([t, j, n]) => {
               setTasks(t);
               setJobs(j);

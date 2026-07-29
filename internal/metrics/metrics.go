@@ -34,6 +34,9 @@ type Registry struct {
 	NodeMemCapacity      *prometheus.GaugeVec
 	NodeMemAllocated     *prometheus.GaugeVec
 	WorkerTasksRunning   prometheus.Gauge
+	ScaleUpTotal         prometheus.Counter
+	ScaleDownTotal       prometheus.Counter
+	AutoscaledWorkers    prometheus.Gauge
 }
 
 // New builds collectors on a private registry (avoids global default clashes
@@ -115,6 +118,21 @@ func New() *Registry {
 			Name:      "worker_tasks_running",
 			Help:      "Tasks currently executing on this worker process.",
 		}),
+		ScaleUpTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: Namespace,
+			Name:      "scale_up_total",
+			Help:      "Times the leader autoscaler launched an additional worker container.",
+		}),
+		ScaleDownTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: Namespace,
+			Name:      "scale_down_total",
+			Help:      "Times the leader autoscaler reclaimed an idle autoscaled worker.",
+		}),
+		AutoscaledWorkers: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Name:      "autoscaled_workers",
+			Help:      "Autoscaled worker nodes currently known to the leader (label autoscaled=true).",
+		}),
 	}
 
 	reg.MustRegister(
@@ -134,6 +152,9 @@ func New() *Registry {
 		r.NodeMemCapacity,
 		r.NodeMemAllocated,
 		r.WorkerTasksRunning,
+		r.ScaleUpTotal,
+		r.ScaleDownTotal,
+		r.AutoscaledWorkers,
 	)
 	return r
 }

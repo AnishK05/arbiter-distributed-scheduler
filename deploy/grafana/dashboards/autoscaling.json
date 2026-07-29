@@ -1,0 +1,42 @@
+{
+  "uid": "arbiter-autoscaling",
+  "title": "Arbiter Autoscaling",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "tags": ["arbiter", "autoscaling"],
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Scale Up / Scale Down",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "sum(increase(arbiter_scale_up_total[1m]))", "legendFormat": "scale-up/min", "refId": "A" },
+        { "expr": "sum(increase(arbiter_scale_down_total[1m]))", "legendFormat": "scale-down/min", "refId": "B" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Autoscaled Workers & Ready Nodes",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "max(arbiter_autoscaled_workers)", "legendFormat": "autoscaled", "refId": "A" },
+        { "expr": "max(arbiter_nodes_total{status=\"ready\"})", "legendFormat": "ready", "refId": "B" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Queue Depth (scale-up signal)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "max(arbiter_queue_depth)", "legendFormat": "pending", "refId": "A" },
+        { "expr": "max(arbiter_tasks_running)", "legendFormat": "running", "refId": "B" }
+      ]
+    }
+  ]
+}

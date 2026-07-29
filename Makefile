@@ -98,6 +98,14 @@ phase8-up: ## Start Phase 6 HA + Prometheus/Grafana + dashboard (CLI/UI DoD)
 phase8-down: ## Stop the Phase 8 dashboard stack
 	docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.phase6.yml -f deploy/docker-compose.phase7.yml -f deploy/docker-compose.phase8.yml down
 
+.PHONY: phase9-up
+phase9-up: ## Start Phase 8 stack + simulated worker autoscaling
+	docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.phase6.yml -f deploy/docker-compose.phase7.yml -f deploy/docker-compose.phase8.yml -f deploy/docker-compose.phase9.yml up -d --build
+
+.PHONY: phase9-down
+phase9-down: ## Stop the Phase 9 autoscaling stack
+	docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.phase6.yml -f deploy/docker-compose.phase7.yml -f deploy/docker-compose.phase8.yml -f deploy/docker-compose.phase9.yml down
+
 .PHONY: demo-up
 demo-up: ## Start the full demo cluster (schedulers, 10 workers, pg, redis, prometheus, grafana, dashboard)
 	docker compose -f deploy/docker-compose.demo.yml up --build

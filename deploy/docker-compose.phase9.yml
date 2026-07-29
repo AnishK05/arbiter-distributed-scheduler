@@ -1,0 +1,61 @@
+# Phase 9 overlay: enable leader-only simulated worker autoscaling.
+# Usage:
+#   make phase9-up
+#
+# The leader watches pending-queue depth and launches extra worker containers
+# (label arbiter.autoscaled=true) on the shared Docker network. Idle
+# autoscaled workers are cordoned and removed. Static compose workers are
+# never reclaimed.
+#
+# Grafana Cluster Overview gains an Autoscaler panel; events appear in the
+# dashboard live feed and Postgres events table.
+
+x-autoscaler-env: &autoscaler-env
+  ARBITER_AUTOSCALER: "true"
+  ARBITER_DOCKER_NETWORK: deploy_default
+  ARBITER_WORKER_IMAGE: deploy-worker:latest
+  ARBITER_AUTOSCALE_SCHEDULER_ADDR: scheduler:7000
+  ARBITER_AUTOSCALE_SCHEDULER_ADDRS: scheduler:7000,scheduler-2:7000,scheduler-3:7000
+
+services:
+  scheduler:
+    environment:
+      <<: *autoscaler-env
+    command:
+      - "--replica-id=scheduler-1"
+      - "--advertise-addr=host.docker.internal:7000"
+      - "--lease-ttl=5s"
+      - "--lease-renew-interval=1s"
+      - "--autoscaler=true"
+      - "--autoscaler-pending-threshold=3"
+      - "--autoscaler-sustain=8s"
+      - "--autoscaler-idle=20s"
+      - "--autoscaler-max=3"
+
+  scheduler-2:
+    environment:
+      <<: *autoscaler-env
+    command:
+      - "--replica-id=scheduler-2"
+      - "--advertise-addr=host.docker.internal:7001"
+      - "--lease-ttl=5s"
+      - "--lease-renew-interval=1s"
+      - "--autoscaler=true"
+      - "--autoscaler-pending-threshold=3"
+      - "--autoscaler-sustain=8s"
+      - "--autoscaler-idle=20s"
+      - "--autoscaler-max=3"
+
+  scheduler-3:
+    environment:
+      <<: *autoscaler-env
+    command:
+      - "--replica-id=scheduler-3"
+      - "--advertise-addr=host.docker.internal:7002"
+      - "--lease-ttl=5s"
+      - "--lease-renew-interval=1s"
+      - "--autoscaler=true"
+      - "--autoscaler-pending-threshold=3"
+      - "--autoscaler-sustain=8s"
+      - "--autoscaler-idle=20s"
+      - "--autoscaler-max=3"
