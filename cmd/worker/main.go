@@ -410,19 +410,20 @@ func (a *workerAgent) runHeartbeatLoop(ctx context.Context, registerReq *arbiter
 func (a *workerAgent) handleAssignments(assignments []*arbiterv1.TaskAssignment) {
 	_, epoch := a.identity()
 	for _, assignment := range assignments {
-		if a.exec.IsRunning(assignment.GetTaskId()) {
+		taskID := assignment.GetTaskId()
+		if a.exec.IsRunning(taskID) {
 			continue
 		}
 		if assignment.GetAssignedEpoch() != epoch {
 			a.logger.Warn("refusing assignment with mismatched epoch",
-				"task_id", assignment.GetTaskId(),
+				"task_id", taskID,
 				"assigned_epoch", assignment.GetAssignedEpoch(),
 				"node_epoch", epoch,
 			)
 			continue
 		}
 		spec := executor.TaskSpec{
-			TaskID:               assignment.GetTaskId(),
+			TaskID:               taskID,
 			Image:                assignment.GetImage(),
 			Command:              assignment.GetCommand(),
 			CPURequestMillicores: assignment.GetRequest().GetCpuMillicores(),
@@ -430,6 +431,10 @@ func (a *workerAgent) handleAssignments(assignments []*arbiterv1.TaskAssignment)
 		}
 
 		a.mu.Lock()
+		if _, exists := a.specs[spec.TaskID]; exists {
+			a.mu.Unlock()
+			continue // already starting/tracking this task
+		}
 		a.specs[spec.TaskID] = spec
 		a.mu.Unlock()
 
@@ -464,6 +469,9 @@ func (a *workerAgent) startAssignedTask(spec executor.TaskSpec) {
 
 	if err := a.exec.Start(context.Background(), spec); err != nil {
 		a.logger.Error("failed to start task container", "task_id", spec.TaskID, "error", err)
+		a.mu.Lock()
+		delete(a.specs, spec.TaskID)
+		a.mu.Unlock()
 		if a.metrics != nil {
 			a.metrics.ObserveTaskStatus("failed")
 		}

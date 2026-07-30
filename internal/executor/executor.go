@@ -160,10 +160,12 @@ func (e *Executor) StopAll() {
 }
 
 func (e *Executor) createAndStart(ctx context.Context, spec TaskSpec) (containerID, runID string, err error) {
-	name := containerName(spec.TaskID)
+	runID = newRunID()
+	// Include runID so concurrent workers on a shared Docker socket (DooD)
+	// never collide on the same container name when a task is raced/retried.
+	name := containerName(spec.TaskID) + "-" + runID[:8]
 	_ = e.removeContainer(ctx, name)
 
-	runID = newRunID()
 	createBody := map[string]any{
 		"Image": spec.Image,
 		"Env": []string{
@@ -178,10 +180,12 @@ func (e *Executor) createAndStart(ctx context.Context, spec TaskSpec) (container
 			"arbiter.mem_request_mb": fmt.Sprintf("%d", spec.MemRequestMB),
 		},
 		"HostConfig": map[string]any{
-			// Keep exited containers so arbiterctl/dashboard can fetch logs
-			// via Docker label lookup (Phase 8). Failure detector still
-			// reaps orphaned containers by name/label when nodes die.
-			"AutoRemove": false,
+			// Auto-remove on exit so large bursts don't exhaust Docker VFS
+			// storage (each container is a full rootfs copy on VFS drivers).
+			// Logs are available while the task is running; Phase 8 describe
+			// still works from Postgres status. Failure detector reaps
+			// orphans by label if a node dies mid-run.
+			"AutoRemove": true,
 		},
 	}
 	if len(spec.Command) > 0 {
@@ -197,8 +201,18 @@ func (e *Executor) createAndStart(ctx context.Context, spec TaskSpec) (container
 	if err != nil {
 		return "", "", err
 	}
-	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		// Stale Created/Exited container from a prior attempt — force-remove and retry once.
+		_ = e.removeContainer(ctx, name)
+		resp, err = e.doJSON(ctx, http.MethodPost, createURL, raw, 30*time.Second)
+		if err != nil {
+			return "", "", err
+		}
+		body, _ = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+	}
 	if resp.StatusCode >= 300 {
 		return "", "", fmt.Errorf("docker create: status %d: %s", resp.StatusCode, string(body))
 	}
@@ -212,11 +226,13 @@ func (e *Executor) createAndStart(ctx context.Context, spec TaskSpec) (container
 	startURL := "http://localhost/containers/" + created.ID + "/start"
 	startResp, err := e.doJSON(ctx, http.MethodPost, startURL, nil, 30*time.Second)
 	if err != nil {
+		_ = e.removeContainer(context.Background(), created.ID)
 		return "", "", err
 	}
 	startBody, _ := io.ReadAll(startResp.Body)
 	_ = startResp.Body.Close()
 	if startResp.StatusCode >= 300 {
+		_ = e.removeContainer(context.Background(), created.ID)
 		return "", "", fmt.Errorf("docker start: status %d: %s", startResp.StatusCode, string(startBody))
 	}
 	return created.ID, runID, nil

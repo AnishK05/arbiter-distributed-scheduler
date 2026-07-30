@@ -191,8 +191,9 @@ here whenever a phase's plan says "pick one, document the choice" or similar.
   snapshot then live Redis messages (with Postgres poll fallback).
 - **`arbiterctl describe task` / `logs`**: describe uses new gRPC `GetTask`; logs hit scheduler
   HTTP `/api/v1/tasks/{id}/logs` (Docker label lookup on the shared host socket — workers and
-  schedulers all mount `/var/run/docker.sock`). Task containers use `AutoRemove: false` so logs
-  remain after exit; orphan cleanup still removes stale containers on node death.
+  schedulers all mount `/var/run/docker.sock`). Task containers use `AutoRemove: true` so large
+  bursts don't exhaust Docker VFS storage (full rootfs copy per container). Logs are available
+  while a task is running; orphan cleanup still removes stale containers on node death.
 - **Dashboard** is Next.js (App Router) on host port **3100** (`make phase8-up`) so it does not
   collide with Grafana on 3000. See `docs/benchmarks/phase8-dashboard.md`.
 

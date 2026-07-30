@@ -119,6 +119,18 @@ def count_running(job_id: str | None = None) -> int:
     return int(psql(q) or "0")
 
 
+def prune_exited_task_containers() -> None:
+    """Reclaim disk during large bursts (AutoRemove is false so logs survive briefly)."""
+    subprocess.run(
+        "docker ps -aq --filter name=arbiter-task- --filter status=exited "
+        "| xargs -r docker rm -f",
+        shell=True,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def wait_until_complete(
     job_id: str, timeout_s: float, sample_interval_s: float
 ) -> tuple[float, int, list[int]]:
@@ -130,6 +142,7 @@ def wait_until_complete(
     deadline = t0 + timeout_s
     peak = 0
     samples: list[int] = []
+    ticks = 0
     while time.monotonic() < deadline:
         row = psql(
             f"""
@@ -146,6 +159,7 @@ def wait_until_complete(
         samples.append(running)
         if running > peak:
             peak = running
+            print(f"  sample: running={running} peak={peak} inflight={inflight}", flush=True)
         if total > 0 and inflight == 0:
             wall = time.monotonic() - t0
             print(
@@ -153,6 +167,9 @@ def wait_until_complete(
                 f"wall_s={wall:.2f} peak_running={peak}"
             )
             return wall, peak, samples
+        ticks += 1
+        if ticks % 20 == 0:
+            prune_exited_task_containers()
         time.sleep(sample_interval_s)
     raise TimeoutError(f"job {job_id} still inflight after {timeout_s}s (peak_running={peak})")
 
@@ -275,14 +292,18 @@ def main() -> int:
     wait_until_idle(args.idle_timeout_s)
 
     job_id = submit_job(args)
-    wait_until_assigned(job_id, args.wait_timeout_s)
 
     wall_s = None
     peak_running = None
     if args.wait_complete:
+        # Don't wait for every task to be assigned first — with a packed
+        # cluster many stay pending until capacity frees. Sample running
+        # count for the whole job lifetime instead.
         wall_s, peak_running, _ = wait_until_complete(
             job_id, args.complete_timeout_s, args.sample_interval_s
         )
+    else:
+        wait_until_assigned(job_id, args.wait_timeout_s)
 
     rows = placement_rows(job_id)
     if len(rows) != args.replicas:
