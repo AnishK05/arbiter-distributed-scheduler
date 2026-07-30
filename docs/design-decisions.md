@@ -223,4 +223,9 @@ here whenever a phase's plan says "pick one, document the choice" or similar.
 - **`scripts/measure_node_failover.py`**: N-trial kill → dead → reassignment timing with p50/p95.
 - **Executor**: container names include a run-id suffix to avoid DooD name collisions under burst;
   create 409 → force-remove + retry; `AutoRemove: true` for VFS-friendly demos.
-- Resume-metric evidence: `docs/benchmarks/phase10-resume-metrics.md`.
+- **Async orphan reaping**: after `MarkNodeDead`, DooD `KillTaskContainers` runs in a background
+  goroutine with its own timeout. Synchronous reaping under the vfs storage driver blocked the
+  failure-detector tick and pushed kill→dead p95 above 3s under load; async reaping keeps
+  detection near the configured `DeadAfter` (~1.5s).
+- Resume-metric evidence: `docs/benchmarks/phase10-resume-metrics.md` (peak 750 concurrent;
+  detection p95 1.66s; leader election max 4.8s < 5s TTL).
