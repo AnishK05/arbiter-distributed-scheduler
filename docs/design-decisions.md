@@ -219,6 +219,8 @@ here whenever a phase's plan says "pick one, document the choice" or similar.
 - **Autoscaler disabled** in the demo so the static 10-node claim stays clean (Phase 9 overlay
   remains for autoscaling demos).
 - **`scripts/load_test.py`**: `--tasks` alias, `--wait-complete` samples peak concurrent `running`
-  + wall-clock/throughput for Section 10.
+  + wall-clock/throughput for Section 10; prunes exited task containers during the run.
 - **`scripts/measure_node_failover.py`**: N-trial kill → dead → reassignment timing with p50/p95.
+- **Executor**: container names include a run-id suffix to avoid DooD name collisions under burst;
+  create 409 → force-remove + retry; `AutoRemove: true` for VFS-friendly demos.
 - Resume-metric evidence: `docs/benchmarks/phase10-resume-metrics.md`.

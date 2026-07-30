@@ -72,7 +72,8 @@ def submit_job(args: argparse.Namespace) -> str:
         args.image,
     ]
     if args.command is not None:
-        cmd.extend(["--command", args.command])
+        for part in args.command:
+            cmd.extend(["--command", part])
     out = run(cmd)
     print(out)
     start = out.find("(")
@@ -247,8 +248,10 @@ def main() -> int:
     parser.add_argument("--image", default="arbiter-workload:latest")
     parser.add_argument(
         "--command",
-        default="60",
-        help="container CMD override (default 60 → sleep_n.py sleeps 60s)",
+        action="append",
+        default=None,
+        help="container CMD arg (repeatable). Default: single arg '60' for arbiter-workload sleep_n.py. "
+        "For busybox use: --command sleep --command 45",
     )
     parser.add_argument("--wait-timeout-s", type=float, default=120.0)
     parser.add_argument(
@@ -287,6 +290,8 @@ def main() -> int:
     if args.replicas < 1:
         print("--replicas/--tasks must be >= 1", file=sys.stderr)
         return 2
+    if args.command is None:
+        args.command = ["60"]
 
     print("waiting for cluster idle (no scheduled/running tasks)...")
     wait_until_idle(args.idle_timeout_s)
