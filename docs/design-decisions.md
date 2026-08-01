@@ -191,8 +191,9 @@ here whenever a phase's plan says "pick one, document the choice" or similar.
   snapshot then live Redis messages (with Postgres poll fallback).
 - **`arbiterctl describe task` / `logs`**: describe uses new gRPC `GetTask`; logs hit scheduler
   HTTP `/api/v1/tasks/{id}/logs` (Docker label lookup on the shared host socket — workers and
-  schedulers all mount `/var/run/docker.sock`). Task containers use `AutoRemove: false` so logs
-  remain after exit; orphan cleanup still removes stale containers on node death.
+  schedulers all mount `/var/run/docker.sock`). Task containers use `AutoRemove: true` so large
+  bursts don't exhaust Docker VFS storage (full rootfs copy per container). Logs are available
+  while a task is running; orphan cleanup still removes stale containers on node death.
 - **Dashboard** is Next.js (App Router) on host port **3100** (`make phase8-up`) so it does not
   collide with Grafana on 3000. See `docs/benchmarks/phase8-dashboard.md`.
 
@@ -208,3 +209,23 @@ here whenever a phase's plan says "pick one, document the choice" or similar.
   plus Grafana panels on Cluster Overview and a dedicated **Arbiter Autoscaling** dashboard.
 - Enabled via `make phase9-up` (`ARBITER_AUTOSCALER=true` + thresholds). See
   `docs/benchmarks/phase9-autoscaling.md`.
+
+## Phase 10
+
+- **Standalone demo compose** (`deploy/docker-compose.demo.yml`, project name `arbiter-demo`): 3
+  scheduler replicas, **10 varied-capacity workers** (1000m–4000m, Σ 23500m), Postgres, Redis,
+  Prometheus (`prometheus.demo.yml` scrapes all 10 workers), Grafana, dashboard — one
+  `make demo-up` / `docker compose -f deploy/docker-compose.demo.yml up -d --build`.
+- **Autoscaler disabled** in the demo so the static 10-node claim stays clean (Phase 9 overlay
+  remains for autoscaling demos).
+- **`scripts/load_test.py`**: `--tasks` alias, `--wait-complete` samples peak concurrent `running`
+  + wall-clock/throughput for Section 10; prunes exited task containers during the run.
+- **`scripts/measure_node_failover.py`**: N-trial kill → dead → reassignment timing with p50/p95.
+- **Executor**: container names include a run-id suffix to avoid DooD name collisions under burst;
+  create 409 → force-remove + retry; `AutoRemove: true` for VFS-friendly demos.
+- **Async orphan reaping**: after `MarkNodeDead`, DooD `KillTaskContainers` runs in a background
+  goroutine with its own timeout. Synchronous reaping under the vfs storage driver blocked the
+  failure-detector tick and pushed kill→dead p95 above 3s under load; async reaping keeps
+  detection near the configured `DeadAfter` (~1.5s).
+- Resume-metric evidence: `docs/benchmarks/phase10-resume-metrics.md` (peak 750 concurrent;
+  detection p95 1.66s; leader election max 4.8s < 5s TTL).

@@ -1,0 +1,366 @@
+# Arbiter demo cluster (Phase 10): 3 scheduler replicas, 10 simulated workers
+# with varied capacities, Postgres, Redis, Prometheus, Grafana, and the
+# Next.js dashboard — one command for the resume "10-node" claim.
+#
+# Usage:
+#   make demo-up
+#   docker compose -f deploy/docker-compose.demo.yml up -d --build
+#
+# URLs (from the host / WSL2):
+#   Dashboard  http://localhost:3100
+#   Grafana    http://localhost:3000  (admin/admin, anonymous Viewer)
+#   Prometheus http://localhost:9090
+#   API/gRPC   localhost:8080 / :7000 (followers on 8086/8087, 7001/7002)
+#
+# Simulated cluster capacity totals 23500m CPU / ~12GB mem across 10 workers
+# so a burst of ~750×40m tasks can sustain 500+ concurrent running tasks.
+
+name: arbiter-demo
+
+x-scheduler-env: &scheduler-env
+  ARBITER_POSTGRES_URL: postgres://arbiter:arbiter@postgres:5432/arbiter?sslmode=disable
+  ARBITER_REDIS_ADDR: redis:6379
+  DOCKER_HOST: unix:///var/run/docker.sock
+  # Autoscaler off for the static 10-node demo claim (use make phase9-up to demo it).
+  ARBITER_AUTOSCALER: "false"
+
+x-worker-base: &worker-base
+  build:
+    context: ..
+    dockerfile: Dockerfile.worker
+  image: arbiter-demo-worker:latest
+  restart: unless-stopped
+  environment:
+    ARBITER_SCHEDULER_ADDR: host.docker.internal:7000
+    ARBITER_SCHEDULER_ADDRS: host.docker.internal:7000,host.docker.internal:7001,host.docker.internal:7002
+    DOCKER_HOST: unix:///var/run/docker.sock
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  depends_on:
+    scheduler:
+      condition: service_healthy
+    scheduler-2:
+      condition: service_healthy
+    scheduler-3:
+      condition: service_healthy
+    workload:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: arbiter-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: arbiter
+      POSTGRES_PASSWORD: arbiter
+      POSTGRES_DB: arbiter
+    ports:
+      - "5432:5432"
+    volumes:
+      - arbiter-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arbiter -d arbiter"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: arbiter-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  workload:
+    build:
+      context: ..
+      dockerfile: Dockerfile.workload
+    image: arbiter-workload:latest
+    container_name: arbiter-workload-build
+    entrypoint: ["true"]
+    restart: "no"
+
+  scheduler:
+    build:
+      context: ..
+      dockerfile: Dockerfile.scheduler
+    image: arbiter-demo-scheduler:latest
+    container_name: arbiter-scheduler-1
+    restart: unless-stopped
+    environment:
+      <<: *scheduler-env
+      ARBITER_REPLICA_ID: scheduler-1
+      ARBITER_ADVERTISE_ADDR: host.docker.internal:7000
+    command:
+      - "--replica-id=scheduler-1"
+      - "--advertise-addr=host.docker.internal:7000"
+      - "--lease-ttl=5s"
+      - "--lease-renew-interval=1s"
+      - "--autoscaler=false"
+    ports:
+      - "7000:7000"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  scheduler-2:
+    image: arbiter-demo-scheduler:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile.scheduler
+    container_name: arbiter-scheduler-2
+    restart: unless-stopped
+    environment:
+      <<: *scheduler-env
+      ARBITER_REPLICA_ID: scheduler-2
+      ARBITER_ADVERTISE_ADDR: host.docker.internal:7001
+    command:
+      - "--grpc-addr=:7000"
+      - "--http-addr=:8080"
+      - "--replica-id=scheduler-2"
+      - "--advertise-addr=host.docker.internal:7001"
+      - "--lease-ttl=5s"
+      - "--lease-renew-interval=1s"
+      - "--autoscaler=false"
+    ports:
+      - "7001:7000"
+      - "8086:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  scheduler-3:
+    image: arbiter-demo-scheduler:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile.scheduler
+    container_name: arbiter-scheduler-3
+    restart: unless-stopped
+    environment:
+      <<: *scheduler-env
+      ARBITER_REPLICA_ID: scheduler-3
+      ARBITER_ADVERTISE_ADDR: host.docker.internal:7002
+    command:
+      - "--grpc-addr=:7000"
+      - "--http-addr=:8080"
+      - "--replica-id=scheduler-3"
+      - "--advertise-addr=host.docker.internal:7002"
+      - "--lease-ttl=5s"
+      - "--lease-renew-interval=1s"
+      - "--autoscaler=false"
+    ports:
+      - "7002:7000"
+      - "8087:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    <<: *worker-base
+    container_name: arbiter-worker-1
+    command:
+      - "--hostname=worker-1"
+      - "--cpu-capacity-millicores=1000"
+      - "--mem-capacity-mb=512"
+      - "--http-addr=:8081"
+    ports:
+      - "8081:8081"
+
+  worker-2:
+    <<: *worker-base
+    container_name: arbiter-worker-2
+    command:
+      - "--hostname=worker-2"
+      - "--cpu-capacity-millicores=1500"
+      - "--mem-capacity-mb=768"
+      - "--http-addr=:8081"
+    ports:
+      - "8082:8081"
+
+  worker-3:
+    <<: *worker-base
+    container_name: arbiter-worker-3
+    command:
+      - "--hostname=worker-3"
+      - "--cpu-capacity-millicores=1500"
+      - "--mem-capacity-mb=768"
+      - "--http-addr=:8081"
+    ports:
+      - "8083:8081"
+
+  worker-4:
+    <<: *worker-base
+    container_name: arbiter-worker-4
+    command:
+      - "--hostname=worker-4"
+      - "--cpu-capacity-millicores=2000"
+      - "--mem-capacity-mb=1024"
+      - "--http-addr=:8081"
+    ports:
+      - "8084:8081"
+
+  worker-5:
+    <<: *worker-base
+    container_name: arbiter-worker-5
+    command:
+      - "--hostname=worker-5"
+      - "--cpu-capacity-millicores=2000"
+      - "--mem-capacity-mb=1024"
+      - "--http-addr=:8081"
+    ports:
+      - "8085:8081"
+
+  worker-6:
+    <<: *worker-base
+    container_name: arbiter-worker-6
+    command:
+      - "--hostname=worker-6"
+      - "--cpu-capacity-millicores=2500"
+      - "--mem-capacity-mb=1280"
+      - "--http-addr=:8081"
+    ports:
+      - "8091:8081"
+
+  worker-7:
+    <<: *worker-base
+    container_name: arbiter-worker-7
+    command:
+      - "--hostname=worker-7"
+      - "--cpu-capacity-millicores=2500"
+      - "--mem-capacity-mb=1280"
+      - "--http-addr=:8081"
+    ports:
+      - "8092:8081"
+
+  worker-8:
+    <<: *worker-base
+    container_name: arbiter-worker-8
+    command:
+      - "--hostname=worker-8"
+      - "--cpu-capacity-millicores=3000"
+      - "--mem-capacity-mb=1536"
+      - "--http-addr=:8081"
+    ports:
+      - "8093:8081"
+
+  worker-9:
+    <<: *worker-base
+    container_name: arbiter-worker-9
+    command:
+      - "--hostname=worker-9"
+      - "--cpu-capacity-millicores=3500"
+      - "--mem-capacity-mb=1792"
+      - "--http-addr=:8081"
+    ports:
+      - "8094:8081"
+
+  worker-10:
+    <<: *worker-base
+    container_name: arbiter-worker-10
+    command:
+      - "--hostname=worker-10"
+      - "--cpu-capacity-millicores=4000"
+      - "--mem-capacity-mb=2048"
+      - "--http-addr=:8081"
+    ports:
+      - "8095:8081"
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: arbiter-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./prometheus/prometheus.demo.yml:/etc/prometheus/prometheus.yml:ro
+      - arbiter-prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      scheduler:
+        condition: service_healthy
+      worker:
+        condition: service_started
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: arbiter-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - arbiter-grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+  dashboard:
+    build:
+      context: ../dashboard
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE: http://localhost:8080
+    image: arbiter-dashboard:latest
+    container_name: arbiter-dashboard
+    restart: unless-stopped
+    ports:
+      - "3100:3000"
+    depends_on:
+      scheduler:
+        condition: service_healthy
+
+volumes:
+  arbiter-postgres-data:
+  arbiter-prometheus-data:
+  arbiter-grafana-data:

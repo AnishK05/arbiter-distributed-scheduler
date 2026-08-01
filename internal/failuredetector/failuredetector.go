@@ -142,12 +142,23 @@ func (d *Detector) evaluate(ctx context.Context, n store.Node) {
 			"orphaned_tasks", len(result.OrphanedTaskIDs),
 			"epoch", result.Node.Epoch,
 		)
+		// Reap asynchronously: DooD force-removes (especially under the VFS
+		// storage driver) can take seconds per batch and would otherwise block
+		// the detector tick — delaying dead detection for other nodes under
+		// load and blowing the sub-3s failover p95.
 		if d.docker != nil && len(result.OrphanedTaskIDs) > 0 {
-			if err := d.docker.KillTaskContainers(ctx, result.OrphanedTaskIDs); err != nil {
-				d.logger.Warn("failuredetector: reap orphan containers", "error", err)
-			} else {
-				d.logger.Info("reaped orphan task containers", "count", len(result.OrphanedTaskIDs))
-			}
+			taskIDs := append([]string(nil), result.OrphanedTaskIDs...)
+			dockerClient := d.docker
+			logger := d.logger
+			go func() {
+				reapCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				defer cancel()
+				if err := dockerClient.KillTaskContainers(reapCtx, taskIDs); err != nil {
+					logger.Warn("failuredetector: reap orphan containers", "error", err)
+				} else {
+					logger.Info("reaped orphan task containers", "count", len(taskIDs))
+				}
+			}()
 		}
 
 	case age >= d.cfg.NotReadyAfter:
