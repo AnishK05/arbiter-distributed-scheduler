@@ -735,8 +735,7 @@ README-documented URL/port.
 - **Load/benchmark tests:** Section 10 below.
 
 All of the above run identically from Windows PowerShell or WSL2 as they would on native Linux CI
-(GitHub Actions runners are Linux).
-are Linux, so no special-casing is needed there either).
+(GitHub Actions runners are Linux, so no special-casing is needed there either).
 
 ---
 
