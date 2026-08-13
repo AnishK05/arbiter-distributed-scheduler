@@ -3,6 +3,11 @@
 *.test
 *.out
 
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
 # Editor/OS cruft
 .vscode/
 .idea/
