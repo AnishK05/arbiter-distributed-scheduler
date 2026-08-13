@@ -135,11 +135,11 @@ sequenceDiagram
 | `proto/` | `.proto` service/message definitions + buf config |
 | `migrations/` | SQL schema migrations |
 | `dashboard/` | Next.js web UI |
-| `scripts/` | Python/shell tooling: load-test, chaos monkey, failover measurement, `verify_demo.sh` |
+| `scripts/` | Host tooling: `arbiter.ps1` (Windows), load-test, chaos, failover, `verify_demo.*` |
 | `deploy/` | Docker Compose stacks, Prometheus/Grafana config |
 | `docs/` | Architecture, design decisions, local-setup runbook, archived benchmarks |
 
 See [`IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md) for the full phase-by-phase build plan,
-data model, gRPC API, and the decisions log. For running the finished project locally (especially
-on Windows + WSL2), start with [`docs/local-setup.md`](local-setup.md).
+data model, gRPC API, and the decisions log. For running the finished project locally — including
+**Windows PowerShell** — start with [`docs/local-setup.md`](local-setup.md).
 

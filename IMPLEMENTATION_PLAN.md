@@ -135,48 +135,49 @@ lease and takes over — that's your "leader-elected coordination" and HA story.
 
 ## 4. Development Environment & Cross-Platform Compatibility (Windows)
 
-Primary development happens on **Windows**. The system is designed so that, in practice, ~95% of it
-already runs identically regardless of host OS, because almost everything actually executes *inside
-Linux containers* via Docker Compose. The few remaining Windows-specific traps are called out below
-so you don't lose time to them mid-project.
+Primary development / demo hosting happens on **Windows**. Almost everything already runs
+identically regardless of host OS, because services execute *inside Linux containers* via Docker
+Compose. The host shell only needs to drive Compose, build a native `arbiterctl`, and run Python
+tooling.
 
-### 4.1 Recommended setup: Docker Desktop + WSL2
+### 4.1 Supported Windows setups
 
-- Install **Docker Desktop for Windows** with the **WSL2 backend** enabled (this is the default and
-  recommended mode for Docker Desktop today).
-- Do your day-to-day development from inside a **WSL2 distro** (e.g. Ubuntu, via `wsl --install`),
-  not from native `cmd.exe`/PowerShell. This gives you:
-  - A real `bash`, so every script in `scripts/` and every `Makefile` target works unmodified.
-  - Native `make`, `git`, and standard Unix tooling with no extra installs.
-  - Best Docker bind-mount and file-watch performance when your repo lives on the WSL2 filesystem
-    (e.g. `~/dev/arbiter-distributed-scheduler`) rather than under `/mnt/c/...`.
-  - `docker`/`docker compose` CLI commands run from inside WSL2 transparently talk to the same
-    Docker Desktop engine — no extra configuration needed beyond enabling WSL2 integration for your
-    distro in Docker Desktop's settings.
-- VS Code's "Remote - WSL" extension (or Cursor's WSL support) lets you edit the WSL2-hosted repo
-  seamlessly from a normal-feeling Windows editor window.
+**A. PowerShell + Docker Desktop (supported for running the finished project)**
 
-This is the only setup this plan assumes going forward. It is **not** a workaround — it's the
-standard, officially-recommended way to do Linux-container-based development on Windows, and it's
-what most real backend/infra engineers on Windows actually use day to day.
+- Install **Docker Desktop for Windows** with the **WSL2 backend** (engine still runs Linux
+  containers; you do not have to enter a WSL distro).
+- Install **Go 1.22+**, **Python 3**, and **Git for Windows** on the Windows host.
+- Use `.\scripts\arbiter.ps1` as the Make alternative (`demo-up`, `build`, `demo-verify`, phase
+  stacks, `test`, …). Smoke check: `.\scripts\verify_demo.ps1`.
+- Compose files keep Linux-style `/var/run/docker.sock` mounts — Docker Desktop interprets them
+  inside its Linux VM whether Compose is launched from PowerShell or WSL.
+- Full walkthrough: [`docs/local-setup.md`](docs/local-setup.md).
 
-### 4.2 Things that would break on native Windows (and how we avoid them)
+**B. WSL2 Ubuntu shell + Docker Desktop (optional; best for Make/bash workflows)**
 
-| Risk | Why it breaks on native Windows | How Arbiter avoids it |
+- Same Docker Desktop install; enable **WSL Integration** for your distro.
+- Develop from Ubuntu (`make`, bash scripts). Prefer cloning under `~/…`, not `/mnt/c/...`, for
+  bind-mount/file-watch performance.
+- VS Code / Cursor **Remote - WSL** is optional but convenient.
+
+### 4.2 Things that would break on naive native Windows (and how we avoid them)
+
+| Risk | Why it breaks | How Arbiter avoids it |
 |---|---|---|
-| Bash scripts (`Makefile`, `scripts/*.sh` if any) | No native bash/make in `cmd.exe`/PowerShell | Developed and run from WSL2 (Section 4.1); nothing in the plan requires native Windows shells. |
-| CRLF line endings on scripts baked into Linux containers | A `.sh`/entrypoint script saved with CRLF line endings fails inside a Linux container with a cryptic `bad interpreter: No such file or directory` error | Commit a `.gitattributes` (Phase 0) forcing LF for `*.sh`, `*.go`, `*.proto`, `Makefile`, and `Dockerfile*`, regardless of the OS/editor that touched them. |
-| Simulating a "paused" node via raw POSIX signals (`SIGSTOP`) | `SIGSTOP` doesn't exist on Windows; a chaos script using `os.kill(pid, signal.SIGSTOP)` would only work on Linux/macOS hosts | `chaos_monkey.py` never signals processes directly — it always acts on **containers** via the Docker Engine API (`docker pause` / `docker unpause` / `docker kill`, or the `docker-py` SDK equivalents). This is not just a Windows workaround, it's also the *more correct* design: workers already run as Docker containers, so pausing at the container/cgroup level is the realistic failure mode to simulate anyway. |
-| Hardcoded Unix paths in Go code (e.g. `/tmp/...`) | Would fail if you ever run a Go binary natively on Windows (e.g. for quick local debugging outside Docker) | Coding guideline: always use `os.TempDir()` / `filepath.Join` in Go code, never hardcoded Unix paths. |
-| Installing Postgres/Redis natively on Windows | Native Windows installs of Postgres/Redis are possible but fiddly and unnecessary | Never install them natively — always use the Dockerized versions from `docker-compose.yml`/`docker-compose.demo.yml`. |
-| Docker socket mount for worker→Docker-daemon access | Path syntax difference between Windows and Linux for `/var/run/docker.sock` | With Docker Desktop + WSL2, `docker-compose.yml`'s standard `- /var/run/docker.sock:/var/run/docker.sock` bind mount works unmodified because Compose is interpreted inside the Linux VM Docker Desktop manages — no path translation needed on your part. |
+| Bash-only `Makefile` / `*.sh` | No `make`/`bash` in stock PowerShell | Ship `scripts/arbiter.ps1` + `verify_demo.ps1` mirroring the common targets; Keep Make for WSL/Linux/macOS. |
+| CRLF line endings on scripts baked into Linux containers | `bad interpreter` inside containers | `.gitattributes` forces LF for `*.sh`, `*.go`, `*.proto`, `Makefile`, `Dockerfile*`, `*.ps1`, etc. |
+| Simulating a "paused" node via `SIGSTOP` | No POSIX signals on Windows | `chaos_monkey.py` only uses Docker Engine API (`pause`/`unpause`/`kill`) against containers. |
+| Hardcoded Unix paths in Go (`/tmp/...`) | Breaks native Windows binaries | Use `os.TempDir()` / `filepath.Join` in host-side Go code. |
+| Native Postgres/Redis installs | Fiddly on Windows | Always use Compose Postgres/Redis. |
+| Docker socket path differences | Windows vs Linux socket paths | Compose bind-mounts `/var/run/docker.sock` into containers; Desktop’s Linux VM provides that path. |
+| `arbiterctl` path in Python tools | `./bin/arbiterctl` vs `.exe` | `scripts/arbiterctl_path.py` resolves both; `arbiter.ps1 build` writes `bin\arbiterctl.exe`. |
 
-### 4.3 If you ever want a native Windows binary
+### 4.3 Native Windows binaries
 
-Go binaries (scheduler, worker, `arbiterctl`) are trivially cross-compilable
-(`GOOS=windows GOARCH=amd64 go build ...`) if you ever want a native `arbiterctl.exe` outside WSL2
-for convenience. This is optional — the CLI works fine invoked from inside WSL2 like everything
-else — but it's a nice side benefit of choosing Go (Section 12, Q9) worth knowing about.
+`.\scripts\arbiter.ps1 build` produces `bin\scheduler.exe`, `bin\worker.exe`, and
+`bin\arbiterctl.exe` on the host. Day-to-day demos only need `arbiterctl.exe` on the host — the
+scheduler and worker processes run inside Compose containers.
+
 
 ---
 
@@ -561,7 +562,7 @@ message Ack {}
 ## 8. Milestone Breakdown
 
 Each phase lists **Tasks** and a **Definition of Done (DoD)** — don't move on until DoD is met.
-All phases are developed and run from inside WSL2 (Section 4).
+Phases can be driven from **Windows PowerShell** or WSL2/Linux/macOS (Section 4).
 
 ### Phase 0 — Scaffolding
 **Tasks**
@@ -572,11 +573,11 @@ All phases are developed and run from inside WSL2 (Section 4).
 - `docker-compose.yml` with just Postgres + Redis, healthchecks.
 - GitHub Actions CI: `go build ./...`, `go vet`, `golangci-lint`, `go test ./...`.
 - `docs/architecture.md` with the diagrams from Section 6.
-- `README.md` section "Development Setup (Windows/WSL2)" pointing back to Section 4 of this doc.
+- `README.md` + `docs/local-setup.md` covering Windows PowerShell and WSL2 (Section 4).
 
-**DoD:** `make build` succeeds; CI green on an empty-ish repo; `docker-compose up` brings up healthy
-Postgres + Redis; a fresh `git clone` on Windows into WSL2 shows LF line endings on all scripts
-(`file scripts/*.py` or `git check-attr` should not show CRLF issues).
+**DoD:** `make build` / `.\scripts\arbiter.ps1 build` succeeds; CI green on an empty-ish repo;
+`docker compose up` brings up healthy Postgres + Redis; a fresh `git clone` on Windows shows LF
+line endings on scripts (`git check-attr` should not show CRLF issues).
 
 ### Phase 1 — Node Registration Skeleton
 **Tasks**
@@ -709,13 +710,14 @@ period causes it to be reclaimed; both are visible in `events` and Grafana.
 - Finalize `docker-compose.demo.yml`: 3 scheduler replicas, 10 simulated worker containers (with
   varied simulated capacities), Postgres, Redis, Prometheus, Grafana, dashboard — this is your
   "10 nodes" resume claim (simulated, per Section 12 Q3), running as a single `docker compose up`.
-- `README.md`: architecture diagram, quickstart, demo instructions, screenshots/GIF, and the
-  Windows/WSL2 setup instructions from Section 4.
+- `README.md` + `docs/local-setup.md`: architecture, quickstart, PowerShell (`arbiter.ps1`) and
+  WSL/Make paths, demo URLs (Section 4).
 - Run and archive the full Section 10 benchmark; commit output to `docs/benchmarks/`.
 
-**DoD:** A fresh clone on Windows (into WSL2) + `docker compose -f deploy/docker-compose.demo.yml up`
-gives a fully working 10-node simulated cluster with dashboard, metrics, and Grafana, reachable from
-a README-documented URL/port.
+**DoD:** A fresh clone on Windows (PowerShell **or** WSL2) +
+`docker compose -f deploy/docker-compose.demo.yml up` / `.\scripts\arbiter.ps1 demo-up` gives a
+fully working 10-node simulated cluster with dashboard, metrics, and Grafana, reachable from a
+README-documented URL/port.
 
 ---
 
@@ -732,7 +734,8 @@ a README-documented URL/port.
   reassignment.
 - **Load/benchmark tests:** Section 10 below.
 
-All of the above run identically from WSL2 as they would on native Linux CI (GitHub Actions runners
+All of the above run identically from Windows PowerShell or WSL2 as they would on native Linux CI
+(GitHub Actions runners are Linux).
 are Linux, so no special-casing is needed there either).
 
 ---

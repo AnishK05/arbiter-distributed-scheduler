@@ -29,6 +29,8 @@ import sys
 import time
 from collections import Counter
 
+from arbiterctl_path import resolve_arbiterctl
+
 
 def run(cmd: list[str], check: bool = True) -> str:
     result = subprocess.run(cmd, capture_output=True, text=True, check=check)
@@ -232,7 +234,11 @@ def print_report(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--arbiterctl", default="./bin/arbiterctl")
+    parser.add_argument(
+        "--arbiterctl",
+        default=None,
+        help="path to arbiterctl (default: ./bin/arbiterctl[.exe])",
+    )
     parser.add_argument("--scheduler-addr", default="localhost:7000")
     parser.add_argument("--name", default="load-test")
     parser.add_argument("--replicas", type=int, default=None, help="number of task replicas")
@@ -292,6 +298,7 @@ def main() -> int:
         return 2
     if args.command is None:
         args.command = ["60"]
+    args.arbiterctl = resolve_arbiterctl(args.arbiterctl)
 
     print("waiting for cluster idle (no scheduled/running tasks)...")
     wait_until_idle(args.idle_timeout_s)

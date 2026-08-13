@@ -1,95 +1,95 @@
 # Local Setup & Run Guide
 
-End-to-end instructions for running Arbiter on a **Windows + Docker Desktop + WSL2**
-machine (the supported development path), with notes for native Linux/macOS.
+End-to-end instructions for running Arbiter after Phases 0–10.
 
-This is the wrap-up guide for a finished Phase 0–10 tree: after these steps you should
-have a live 10-node demo cluster, a working CLI, and the dashboard/Grafana/Prometheus
-surfaces open in a browser.
+**Windows is a first-class host.** You can run the full demo from **PowerShell**
+(Windows PowerShell 5.1 or PowerShell 7) with Docker Desktop. WSL2 remains a
+supported alternative if you prefer a Linux shell / `make`.
 
-> **Not supported:** running `make` / Compose / workers from native Windows PowerShell
-> or `cmd.exe`. Always use a WSL2 shell (Ubuntu recommended). See
-> [`IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md) Section 4 for why.
+After these steps you should have a live 10-node demo cluster, a working
+`arbiterctl` CLI, and the dashboard / Grafana / Prometheus surfaces in a browser.
 
 ---
 
-## 1. One-time Windows prerequisites
+## Quick start (PowerShell)
 
-### 1.1 Docker Desktop + WSL2
+```powershell
+# Prerequisites already installed: Docker Desktop, Go 1.22+, Python 3, git
+git clone https://github.com/AnishK05/arbiter-distributed-scheduler.git
+cd arbiter-distributed-scheduler
 
-1. Install [Docker Desktop for Windows](https://www.docker.com/products/docker-desktop/)
-   with the **WSL2 backend** (default in current versions).
-2. If you do not already have a distro: open PowerShell as Administrator and run
-   `wsl --install` (Ubuntu is fine), then reboot if prompted.
-3. In Docker Desktop → **Settings → Resources → WSL Integration**, enable integration
-   for your distro. Confirm Docker is running (whale icon).
-4. Recommended Desktop resources for the full demo (Settings → Resources):
-   - **CPU:** ≥ 4 cores
-   - **Memory:** ≥ 8 GB (12+ GB if you plan the 750-task concurrency run)
-   - **Disk image size:** ≥ 64 GB free in the Docker virtual disk
+# If scripts are blocked once:  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+.\scripts\arbiter.ps1 demo-up
+.\scripts\arbiter.ps1 build
+.\scripts\arbiter.ps1 demo-verify
 
-### 1.2 Tools inside WSL2 (Ubuntu)
+.\bin\arbiterctl.exe submit demo --replicas 5 --wait
+# Browser: http://localhost:3100  (dashboard)
+#          http://localhost:3000  (Grafana, admin/admin)
+#          http://localhost:9090  (Prometheus)
 
-Open an Ubuntu WSL terminal and install:
-
-```bash
-sudo apt update
-sudo apt install -y build-essential make git curl python3 ca-certificates
-
-# Go 1.22+ (repo pin is 1.22.2; GOTOOLCHAIN=local avoids auto-download surprises)
-curl -fsSL https://go.dev/dl/go1.22.2.linux-amd64.tar.gz -o /tmp/go.tgz
-sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf /tmp/go.tgz
-echo 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin' >> ~/.bashrc
-source ~/.bashrc
-go version   # expect go1.22.2
+.\scripts\arbiter.ps1 demo-down
 ```
 
-Verify Docker is reachable **from inside WSL**:
+`.\scripts\arbiter.ps1` is the Windows equivalent of the Makefile targets
+(`demo-up`, `demo-down`, `demo-verify`, `build`, `up`/`down`, phase overlays, `test`, …).
 
-```bash
+---
+
+## 1. Windows prerequisites (PowerShell path)
+
+### 1.1 Docker Desktop
+
+1. Install [Docker Desktop for Windows](https://www.docker.com/products/docker-desktop/).
+2. Use the **WSL2 backend** (Docker Desktop default). You do **not** need to develop
+   inside a WSL distro for the PowerShell path — Desktop still uses a Linux VM to
+   run containers, which is what Arbiter’s Compose files expect (including
+   `/var/run/docker.sock` DooD mounts).
+3. Confirm from PowerShell:
+
+```powershell
 docker version
 docker compose version
 ```
 
-If `docker` is missing or permission-denied, re-check WSL Integration in Docker Desktop
-and ensure your user can talk to the engine (`docker` group / Desktop “Use the WSL 2
-based engine”).
+4. Recommended Desktop resources (Settings → Resources) for the full demo:
+   - **CPU:** ≥ 4 cores
+   - **Memory:** ≥ 8 GB (12+ GB for the 750-task concurrency run)
+   - **Disk image size:** ≥ 64 GB free
 
-### 1.3 Clone into the WSL filesystem
+### 1.2 Go, Python, Git
 
-```bash
-mkdir -p ~/dev && cd ~/dev
+| Tool | Notes |
+|---|---|
+| [Go 1.22+](https://go.dev/dl/) | Repo pin `1.22.2`. After install, open a **new** PowerShell and run `go version`. |
+| [Python 3](https://www.python.org/downloads/) | Check **“Add python.exe to PATH”**. Verify with `python --version`. |
+| [Git for Windows](https://git-scm.com/download/win) | Repo `.gitattributes` forces LF for container-facing files. |
+
+Optional: [`curl`](https://curl.se/) is built into modern Windows 10/11 and used by some docs;
+`demo-verify` uses `Invoke-WebRequest` instead.
+
+### 1.3 Execution policy (once)
+
+If PowerShell refuses to run the scripts:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+### 1.4 Clone
+
+```powershell
+cd $HOME\dev   # or any directory you prefer
 git clone https://github.com/AnishK05/arbiter-distributed-scheduler.git
 cd arbiter-distributed-scheduler
 ```
 
-Clone under `~/…` (the Linux filesystem), **not** `/mnt/c/...`. Bind mounts and file
-watches are much slower on the Windows mount.
-
-Optional: open the folder with VS Code / Cursor **Remote - WSL** so the editor and
-terminal share the same Linux environment.
+Cloning on the Windows filesystem (e.g. `C:\Users\…`) is fine for the PowerShell
+path — Compose build context is sent to Docker Desktop’s Linux engine.
 
 ---
 
-## 2. Bring up the full demo (recommended first run)
-
-From the repo root in WSL:
-
-```bash
-make demo-up          # builds images + starts everything
-make build            # local arbiterctl / scheduler / worker binaries → ./bin
-```
-
-Equivalent without Make:
-
-```bash
-docker compose -f deploy/docker-compose.demo.yml up -d --build
-```
-
-First boot pulls base images and compiles Go/Next.js containers — expect several
-minutes. Subsequent `make demo-up` runs are much faster.
-
-### What comes up
+## 2. Demo cluster (what comes up)
 
 | Service | Count | Host URL / port |
 |---|---|---|
@@ -100,147 +100,125 @@ minutes. Subsequent `make demo-up` runs are much faster.
 | Grafana | 1 | http://localhost:3000 (admin/admin; anonymous Viewer) |
 | Next.js dashboard | 1 | http://localhost:3100 |
 
-Open the dashboard and Grafana in your **Windows browser** — Docker Desktop publishes
-these ports to `localhost` on the Windows host.
+First `demo-up` pulls base images and builds Go/Next.js containers — expect several
+minutes. Later runs are much faster.
 
-### Smoke check
+Equivalent without the helper:
 
-```bash
-# or: bash scripts/verify_demo.sh
-curl -sf http://localhost:8080/healthz && echo
-curl -s http://localhost:8080/api/v1/nodes | python3 -c \
-  "import sys,json; ns=json.load(sys.stdin)['nodes']; \
-   print(f\"ready={sum(1 for n in ns if n['status']=='ready')}/{len(ns)}\")"
-
-./bin/arbiterctl get nodes
-./bin/arbiterctl submit hello --replicas 3 --wait
-```
-
-You should see **10 ready workers**, then three tasks succeed.
-
-Tear down when finished:
-
-```bash
-make demo-down
+```powershell
+docker compose -f deploy/docker-compose.demo.yml up -d --build
+go build -o bin\arbiterctl.exe .\cmd\arbiterctl
 ```
 
 ---
 
-## 3. Day-to-day commands
+## 3. Day-to-day commands (PowerShell)
 
 ### Submit jobs
 
-```bash
-./bin/arbiterctl submit demo --replicas 5 --wait
-./bin/arbiterctl submit burn --replicas 10 --cpu-millicores 100 --memory-mb 64 --command 30
-./bin/arbiterctl describe task <task-id>
-./bin/arbiterctl logs <task-id>
+```powershell
+.\bin\arbiterctl.exe submit demo --replicas 5 --wait
+.\bin\arbiterctl.exe submit burn --replicas 10 --cpu-millicores 100 --memory-mb 64 --command 30
+.\bin\arbiterctl.exe describe task <task-id>
+.\bin\arbiterctl.exe logs <task-id>
+.\bin\arbiterctl.exe get nodes
 ```
 
 ### Section 10-style concurrency (500+ peak)
 
 Use a tiny image and memory requests that fit cluster memory (Σ ≈ 12032 MiB).
-`--memory-mb 32` caps concurrent running tasks around **376**; use **16** for 500+:
+`--memory-mb 32` caps concurrent running around **376**; use **16** for 500+:
 
-```bash
+```powershell
 docker pull busybox:1.36
-python3 scripts/load_test.py --tasks 750 --cpu-millicores 30 --memory-mb 16 \
-  --image busybox:1.36 --command sleep --command 55 \
+python scripts\load_test.py --tasks 750 --cpu-millicores 30 --memory-mb 16 `
+  --image busybox:1.36 --command sleep --command 55 `
   --wait-complete --policy bin_pack --name local-concurrency
 ```
 
 ### Failover demos
 
-```bash
-# Steady load, then kill workers (sub-3s detection target)
-./bin/arbiterctl submit steady --replicas 100 --cpu-millicores 40 --memory-mb 16 \
+```powershell
+.\bin\arbiterctl.exe submit steady --replicas 100 --cpu-millicores 40 --memory-mb 16 `
   --image busybox:1.36 --command sleep --command 900 --scheduling-policy spread
-python3 scripts/measure_node_failover.py --trials 5 --threshold-ms 3000
+python scripts\measure_node_failover.py --trials 5 --threshold-ms 3000
 
-# Leader kill → new lease holder within one TTL (5s)
-python3 scripts/measure_leader_failover.py --trials 3 --threshold-ms 5000 --submit-after
+python scripts\measure_leader_failover.py --trials 3 --threshold-ms 5000 --submit-after
 ```
 
-Archived numbers from the Phase 10 run live in
-[`docs/benchmarks/phase10-resume-metrics.md`](benchmarks/phase10-resume-metrics.md).
+Archived numbers: [`docs/benchmarks/phase10-resume-metrics.md`](benchmarks/phase10-resume-metrics.md).
 
-### Smaller stacks (dev / phase work)
+### Smaller stacks
 
-```bash
-make up              # 1 scheduler + 1 worker
-make phase6-up       # 3 schedulers (HA)
-make phase8-up       # + Prometheus/Grafana/dashboard
-make phase9-up       # + simulated autoscaler
-make down            # stop the base stack (use matching *-down for overlays)
+```powershell
+.\scripts\arbiter.ps1 up              # 1 scheduler + 1 worker
+.\scripts\arbiter.ps1 phase6-up       # 3 schedulers (HA)
+.\scripts\arbiter.ps1 phase8-up       # + Prometheus/Grafana/dashboard
+.\scripts\arbiter.ps1 phase9-up       # + simulated autoscaler
+.\scripts\arbiter.ps1 down
 ```
 
-Edit/rebuild loop without rebuilding worker/scheduler images:
+### Tests
 
-```bash
+```powershell
+.\scripts\arbiter.ps1 vet
+.\scripts\arbiter.ps1 test
+
+# Integration tests against Compose Postgres/Redis:
 docker compose -f deploy/docker-compose.yml up -d postgres redis
-make run-scheduler   # terminal 1
-make run-worker      # terminal 2
+$env:ARBITER_TEST_POSTGRES_URL = "postgres://arbiter:arbiter@localhost:5432/arbiter?sslmode=disable"
+$env:ARBITER_TEST_REDIS_ADDR = "localhost:6379"
+.\scripts\arbiter.ps1 test
 ```
 
 ---
 
-## 4. Tests
+## 4. WSL2 / Linux / macOS alternative
+
+If you prefer `make` and a bash shell:
 
 ```bash
-make vet
-make test            # unit tests; store/cache/failuredetector skip without DBs
-
-# Full integration tests against Compose Postgres/Redis:
-docker compose -f deploy/docker-compose.yml up -d postgres redis
-ARBITER_TEST_POSTGRES_URL="postgres://arbiter:arbiter@localhost:5432/arbiter?sslmode=disable" \
-ARBITER_TEST_REDIS_ADDR="localhost:6379" \
-make test
+make demo-up && make build && make demo-verify
 ```
 
-Optional lint (installs via `make tools` if needed):
+On Windows, that means Docker Desktop **plus** an Ubuntu WSL distro with Go/`make`/
+`python3` installed, and the repo cloned under `~/…` (not `/mnt/c`) for best
+bind-mount performance. See historical notes in
+[`IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md) Section 4.
 
-```bash
-make tools && make lint
-```
+Native Linux/macOS: install Docker Engine (or Desktop), Go, `make`, `python3`, then
+use either `make` or the same `docker compose` commands.
 
 ---
 
-## 5. Troubleshooting (Windows / WSL2)
+## 5. Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `Cannot connect to the Docker daemon` | Desktop not running or WSL integration off | Start Docker Desktop; enable WSL Integration for your distro |
-| `permission denied` on `/var/run/docker.sock` | Socket group / Desktop quirk | Restart Desktop; ensure your user is in the `docker` group inside WSL (`sudo usermod -aG docker $USER`, then new shell) |
-| Very slow builds / file watches | Repo under `/mnt/c/...` | Move/clone to `~/dev/...` on the Linux filesystem |
-| Workers never reach `ready` | `host.docker.internal` / schedulers unhealthy | `docker compose -f deploy/docker-compose.demo.yml ps`; check `docker logs arbiter-scheduler-1` |
-| Tasks stuck `scheduled`, no containers | Docker-out-of-Docker socket | Confirm workers mount `/var/run/docker.sock`; `docker logs arbiter-worker-1` |
-| Disk fills during large bursts | Many task containers (worse on exotic storage drivers) | Prefer `busybox:1.36`; executor uses `AutoRemove`; run `make demo-down` and `docker system prune` between big runs |
-| Port already in use (`5432`, `8080`, …) | Another stack or local Postgres | `make demo-down` / `make down`, or stop the conflicting service |
-| CRLF / `bad interpreter` in containers | Line endings | Repo `.gitattributes` forces LF; re-clone if you overrode `core.autocrlf` |
-| `make: command not found` | Missing build tools | `sudo apt install -y make build-essential` |
-| Browser can't open dashboard | Wrong port or stack down | Use **http://localhost:3100** (not 3001); confirm `docker ps` shows `arbiter-dashboard` |
+| `Cannot connect to the Docker daemon` | Desktop not running | Start Docker Desktop; wait until it is healthy |
+| `running scripts is disabled on this system` | Execution policy | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
+| `go: command not found` / `python` missing | PATH / new shell needed | Re-open PowerShell after installs; confirm `go version` / `python --version` |
+| `arbiterctl` / script can’t find CLI | Binaries not built | `.\scripts\arbiter.ps1 build` → use `.\bin\arbiterctl.exe` |
+| Workers never reach `ready` | Schedulers unhealthy / advertise | `docker compose -f deploy/docker-compose.demo.yml ps`; `docker logs arbiter-scheduler-1` |
+| Tasks stuck `scheduled` | DooD socket | Confirm workers mount Docker socket; check `docker logs arbiter-worker-1` |
+| Disk fills on large bursts | Many task containers | Prefer `busybox:1.36`; run `.\scripts\arbiter.ps1 demo-down` and `docker system prune` |
+| Port in use (`5432`, `8080`, …) | Another stack | `.\scripts\arbiter.ps1 demo-down` / `down` |
+| Browser can’t open dashboard | Wrong port | Use **http://localhost:3100** |
+
+Compose files keep Linux-style `/var/run/docker.sock` mounts on purpose: Docker Desktop
+interprets them inside its Linux VM whether you launch Compose from PowerShell or WSL.
 
 ---
 
-## 6. macOS / native Linux
-
-Skip the Windows/WSL section. Install Docker Engine (or Docker Desktop on Mac), Go 1.22+,
-`make`, and `python3`, then run the same `make demo-up` / `make build` flow. Compose
-already sets `extra_hosts: host.docker.internal:host-gateway` so worker→scheduler
-advertise addresses work on Linux too.
-
----
-
-## 7. Project map (where to look next)
+## 6. Project map
 
 | Doc | Purpose |
 |---|---|
-| [`README.md`](../README.md) | Project overview + quick demo |
-| [`IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md) | Full phase plan + design |
+| [`README.md`](../README.md) | Overview + quick demo |
+| [`IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md) | Full phase plan |
 | [`docs/architecture.md`](architecture.md) | Diagrams + repo map |
 | [`docs/design-decisions.md`](design-decisions.md) | Per-phase choices |
 | [`docs/benchmarks/`](benchmarks/) | Measured DoD / resume evidence |
-| [`scripts/README.md`](../scripts/README.md) | Load test / chaos / failover scripts |
+| [`scripts/README.md`](../scripts/README.md) | Load test / chaos / failover / PowerShell helper |
 
-Phases 0–10 are complete. Stretch goals (Raft, deeper partitions, etc.) are optional and
-listed in the plan Section 11 — not required to run the demo locally.
+Phases 0–10 are complete. Stretch goals in the plan Section 11 are optional.

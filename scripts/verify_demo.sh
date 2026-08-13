@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Smoke-check the Phase 10 demo stack after `make demo-up`.
-# Run from the repo root inside WSL2 / Linux / macOS (not native Windows shells).
+# For Windows PowerShell use: .\scripts\verify_demo.ps1  (or .\scripts\arbiter.ps1 demo-verify)
 set -euo pipefail
 
 API="${ARBITER_HTTP_ADDR:-http://localhost:8080}"

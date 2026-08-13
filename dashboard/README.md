@@ -2,16 +2,22 @@
 
 Next.js + TypeScript UI for the cluster control plane.
 
-```bash
+```powershell
 # Full demo (recommended): dashboard at http://localhost:3100
-make demo-up
+.\scripts\arbiter.ps1 demo-up
+```
 
-# Or against a running scheduler only:
+```bash
+make demo-up
+# or: make phase8-up
+```
+
+Dev server against a running scheduler:
+
+```bash
 cd dashboard
 npm install
 NEXT_PUBLIC_API_BASE=http://localhost:8080 npm run dev
 ```
 
-Also via `make phase8-up` → http://localhost:3100.
-
-Windows/WSL2 walkthrough: [`docs/local-setup.md`](../docs/local-setup.md).
+Local run (PowerShell + WSL): [`docs/local-setup.md`](../docs/local-setup.md).
