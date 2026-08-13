@@ -12,8 +12,9 @@
 #   Prometheus http://localhost:9090
 #   API/gRPC   localhost:8080 / :7000 (followers on 8086/8087, 7001/7002)
 #
-# Simulated cluster capacity totals 23500m CPU / ~12GB mem across 10 workers
-# so a burst of ~750×40m tasks can sustain 500+ concurrent running tasks.
+# Simulated cluster capacity totals 23500m CPU / ~12 GiB mem across 10 workers.
+# For 500+ concurrent running tasks use ~30m CPU / 16 MiB requests (32 MiB
+# memory-binds around ~376 concurrent). See docs/local-setup.md.
 
 name: arbiter-demo
 

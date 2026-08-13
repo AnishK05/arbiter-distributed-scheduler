@@ -22,6 +22,8 @@ import subprocess
 import sys
 import time
 
+from arbiterctl_path import resolve_arbiterctl
+
 
 CONTAINER_BY_ID = {
     "scheduler-1": "arbiter-scheduler-1",
@@ -126,7 +128,7 @@ def submit_probe_job(scheduler_addr: str) -> None:
     wait_for_ready_worker()
     run(
         [
-            "./bin/arbiterctl",
+            resolve_arbiterctl(),
             "--scheduler-addr",
             scheduler_addr,
             "submit",

@@ -115,6 +115,10 @@ demo-down: ## Stop the full demo cluster (including autoscaled leftovers)
 	docker compose -f deploy/docker-compose.demo.yml down --remove-orphans
 	-docker ps -aq --filter label=arbiter.autoscaled=true | xargs -r docker rm -f
 
+.PHONY: demo-verify
+demo-verify: ## Smoke-check the demo stack (healthz, 10 ready workers, sample submit)
+	bash scripts/verify_demo.sh
+
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR)
