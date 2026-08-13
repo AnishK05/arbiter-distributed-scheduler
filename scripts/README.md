@@ -1,18 +1,37 @@
 # Scripts
 
-Python tooling (not core services — see `IMPLEMENTATION_PLAN.md` Section 3):
+Python / shell tooling (not core services — see `IMPLEMENTATION_PLAN.md` Section 3):
 
-- `measure_failover.py` (Phase 2) — kills a worker container N times via `docker kill`/`docker
-  start` and asserts the scheduler marks it `dead` in Postgres within a threshold; see
-  `docs/benchmarks/phase2-failure-detection.md`. The reassignment-aware version of this same
-  methodology becomes part of the full resume-metric benchmark in Phase 5+ (Section 10).
-- `load_test.py` (Phase 4) — submits a configurable burst of tasks and prints per-node placement
-  distribution + concentration stats; used for the bin_pack vs spread comparison in
-  `docs/benchmarks/phase4-placement.md`.
-- `chaos_monkey.py` (Phase 5) — kills/pauses worker containers via the Docker Engine API
-  (`docker kill` / `docker pause` / `docker unpause`) while a job is in flight; asserts the job
-  still reaches all-succeeded with no duplicate `task_succeeded` events.
-- `workloads/` (Phase 3) — trivial example programs (`sleep_n.py`, `cpu_burn.py`, `fail_n.py`) baked
-  into `arbiter-workload:latest` (`Dockerfile.workload`) so submitted tasks have something to
-  actually execute. Default ENTRYPOINT sleeps 2s and exits 0. `sleep_n.py` prints
-  `ARBITER_TASK_ID` / `ARBITER_RUN_ID` for Phase 5 duplicate-execution checks.
+| Script | Phase | Purpose |
+|---|---|---|
+| `verify_demo.sh` | 10 | Smoke-check after `make demo-up`: healthz, ≥10 ready nodes, optional 3-replica submit |
+| `measure_failover.py` | 2 | Kill→`dead` timing (preliminary); see `docs/benchmarks/phase2-failure-detection.md` |
+| `measure_node_failover.py` | 10 | Kill→dead→reassignment p50/p95 (≥20 trials for the sub-3s claim) |
+| `measure_leader_failover.py` | 6 / 10 | Kill leader; assert new lease within one TTL; optional probe submit |
+| `load_test.py` | 4 / 10 | Burst submit + placement histogram; `--wait-complete` samples peak concurrent `running` |
+| `chaos_monkey.py` | 5 | `docker kill` / `pause` / `unpause` while a job runs; assert all-succeeded |
+| `workloads/` | 3 | `sleep_n.py`, `cpu_burn.py`, `fail_n.py` baked into `arbiter-workload:latest` |
+
+## Common invocations
+
+```bash
+# After make demo-up && make build
+bash scripts/verify_demo.sh
+
+# Placement comparison (Phase 4)
+python3 scripts/load_test.py --replicas 100 --cpu-millicores 50 --policy bin_pack
+python3 scripts/load_test.py --replicas 100 --cpu-millicores 50 --policy spread
+
+# Section 10 concurrency (500+ peak — see docs/local-setup.md)
+docker pull busybox:1.36
+python3 scripts/load_test.py --tasks 750 --cpu-millicores 30 --memory-mb 16 \
+  --image busybox:1.36 --command sleep --command 55 \
+  --wait-complete --policy bin_pack
+
+# Node / leader failover
+python3 scripts/measure_node_failover.py --trials 20 --threshold-ms 3000
+python3 scripts/measure_leader_failover.py --trials 5 --threshold-ms 5000 --submit-after
+```
+
+Evidence for measured runs lives under [`docs/benchmarks/`](../docs/benchmarks/).
+Full Windows/WSL2 walkthrough: [`docs/local-setup.md`](../docs/local-setup.md).

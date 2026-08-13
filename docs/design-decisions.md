@@ -229,3 +229,5 @@ here whenever a phase's plan says "pick one, document the choice" or similar.
   detection near the configured `DeadAfter` (~1.5s).
 - Resume-metric evidence: `docs/benchmarks/phase10-resume-metrics.md` (peak 750 concurrent;
   detection p95 1.66s; leader election max 4.8s < 5s TTL).
+- Local runbook for Windows/WSL2 (and Linux/macOS): `docs/local-setup.md`, plus
+  `scripts/verify_demo.sh` / `make demo-verify` for a post-`demo-up` smoke check.

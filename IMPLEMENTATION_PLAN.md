@@ -838,16 +838,19 @@ has a clear checkpoint.
 
 ## 14. Definition-of-Done Checklist (maps directly to the resume line)
 
-- [ ] **"500+ concurrent tasks across 10 nodes"** — Section 10 benchmark run, peak concurrency
-      measured ≥ 500 on a 10-simulated-worker demo cluster, output archived in `docs/benchmarks/`.
-- [ ] **"leader-elected coordination"** — 3 scheduler replicas, Postgres-lease election (Phase 6),
-      demonstrated leader failover with no scheduling downtime beyond one lease TTL.
-- [ ] **"heartbeat-based failure detection with sub-3s failover"** — Phase 2 + 5 implemented, p95
-      failover time measured and under 3s across ≥20 trials (Section 10), not a single best-case run.
-- [ ] **"bin-packing allocation"** — Phase 4 `BinPackScorer` implemented and validated against
-      `SpreadScorer` with measured placement-distribution differences.
-- [ ] **"automatic task reassignment"** — Phase 5 orphan detection + reschedule + fencing, validated
-      under chaos testing with zero observed zombie/duplicate executions.
+- [x] **"500+ concurrent tasks across 10 nodes"** — Section 10 benchmark run, peak concurrency
+      measured ≥ 500 on a 10-simulated-worker demo cluster, output archived in `docs/benchmarks/`
+      (`phase10-resume-metrics.md`: peak 750).
+- [x] **"leader-elected coordination"** — 3 scheduler replicas, Postgres-lease election (Phase 6),
+      demonstrated leader failover with no scheduling downtime beyond one lease TTL
+      (`phase10-resume-metrics.md` / `phase6-leader-failover.md`).
+- [x] **"heartbeat-based failure detection with sub-3s failover"** — Phase 2 + 5 implemented, p95
+      failover time measured and under 3s across ≥20 trials (Section 10), not a single best-case run
+      (detection p95 ~1.66s in `phase10-resume-metrics.md`).
+- [x] **"bin-packing allocation"** — Phase 4 `BinPackScorer` implemented and validated against
+      `SpreadScorer` with measured placement-distribution differences (`phase4-placement.md`).
+- [x] **"automatic task reassignment"** — Phase 5 orphan detection + reschedule + fencing, validated
+      under chaos testing with zero observed zombie/duplicate executions (`phase5-chaos.md`).
 
 ---
 

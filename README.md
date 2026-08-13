@@ -15,7 +15,8 @@ The full, phase-by-phase implementation plan lives in
 [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). Architecture diagrams are in
 [`docs/architecture.md`](docs/architecture.md).
 
-**Status:** Phase 10 complete — demo cluster + archived Section 10 benchmarks.
+**Status:** Phases 0–10 complete. Ready to run locally on **Windows via Docker Desktop + WSL2**
+(also Linux/macOS). Step-by-step guide: **[`docs/local-setup.md`](docs/local-setup.md)**.
 
 ## Architecture
 
@@ -58,42 +59,19 @@ graph TB
 Go · gRPC/Protobuf · PostgreSQL · Redis · Docker · Prometheus · Grafana · Next.js/TypeScript ·
 Python (tooling)
 
-## Development Setup (Windows/WSL2)
+## Quick start (Windows / WSL2)
 
-Primary development happens on Windows. The recommended (and only supported) setup is:
-
-1. Install [Docker Desktop for Windows](https://www.docker.com/products/docker-desktop/) with the
-   **WSL2 backend** enabled (default in current versions).
-2. Install a WSL2 distro if you don't have one: `wsl --install` (Ubuntu is a good default).
-3. In Docker Desktop's Settings → Resources → WSL Integration, enable integration for your distro.
-4. Clone this repo **inside** the WSL2 filesystem (e.g. `~/dev/arbiter-distributed-scheduler`), not
-   under `/mnt/c/...` — this matters for Docker bind-mount/file-watch performance.
-5. Do all development (editing, `make`, `go`, `docker compose`, etc.) from inside a WSL2 shell (or
-   an editor with WSL support, e.g. VS Code's "Remote - WSL" extension / Cursor's WSL support).
-
-This isn't a workaround — it's the standard way to do Linux-container-based backend development on
-Windows. See [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) Section 4 for the full rationale.
-
-If you're on macOS/Linux natively, none of the above applies — just make sure Docker and Go are
-installed.
-
-## Prerequisites
-
-- [Go](https://go.dev/dl/) 1.22+ (repo pin: 1.22.2 / `GOTOOLCHAIN=local`)
-- [Docker](https://docs.docker.com/get-docker/) + Docker Compose v2
-- `make`
-- (Optional, only if you edit `.proto` files) run `make tools`
-
-## Demo cluster (recommended)
-
-One compose file brings up the full **10-node simulated cluster**:
+Supported path: **Docker Desktop (WSL2 backend) + Ubuntu WSL**. Native PowerShell/`cmd` is not
+supported — use a WSL shell for all `make` / `docker` / `go` commands.
 
 ```bash
+# Inside WSL2, repo cloned under ~/… (not /mnt/c/…)
 git clone https://github.com/AnishK05/arbiter-distributed-scheduler.git
 cd arbiter-distributed-scheduler
 
-make demo-up          # or: docker compose -f deploy/docker-compose.demo.yml up -d --build
+make demo-up    # 3 schedulers, 10 workers, Postgres, Redis, Prometheus, Grafana, dashboard
 make build
+bash scripts/verify_demo.sh
 ```
 
 | Surface | URL |
@@ -101,25 +79,39 @@ make build
 | **Dashboard** | http://localhost:3100 |
 | **Grafana** | http://localhost:3000 (admin/admin, anonymous Viewer) |
 | **Prometheus** | http://localhost:9090 |
-| Scheduler API / gRPC | http://localhost:8080 · `localhost:7000` (HA: `:7001`/`:7002`, `:8086`/`:8087`) |
+| Scheduler API / gRPC | http://localhost:8080 · `localhost:7000` |
 
 ```bash
-# Confirm 10 ready workers
-curl -s http://localhost:8080/api/v1/nodes | python3 -c "import sys,json; print(sum(1 for n in json.load(sys.stdin)['nodes'] if n['status']=='ready'))"
-
-# Submit a small job
 ./bin/arbiterctl submit demo --replicas 5 --wait
-
-# Section 10 concurrency benchmark (archives → docs/benchmarks/phase10-resume-metrics.md)
-python3 scripts/load_test.py --tasks 750 --cpu-millicores 40 --memory-mb 32 \
-  --command 45 --wait-complete --policy bin_pack
-
 make demo-down
 ```
 
-Worker capacities are **varied** (1000m–4000m) and total **23500m** simulated CPU so a packed burst
-can sustain 500+ concurrent running tasks. This is a simulated multi-node cluster on one machine
-(see Section 12 Q3 in the plan) — honest and normal for a project of this scope.
+Full prerequisites, troubleshooting, failover demos, and the 500+ concurrency recipe:
+**[`docs/local-setup.md`](docs/local-setup.md)**.
+
+## Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows: WSL2 backend) or
+  Docker Engine + Compose v2 (Linux/macOS)
+- [Go](https://go.dev/dl/) 1.22+ (repo pin: 1.22.2 / `GOTOOLCHAIN=local`)
+- `make`, `git`, `python3`, `curl`
+- (Optional, only if you edit `.proto` files) `make tools`
+
+## Demo cluster details
+
+Worker capacities are **varied** (1000m–4000m) and total **23500m** simulated CPU / ~12 GiB mem so a
+packed burst can sustain 500+ concurrent running tasks. This is a simulated multi-node cluster on
+one machine (see Section 12 Q3 in the plan) — honest and normal for a project of this scope.
+
+```bash
+# Section 10 concurrency (use 16 MiB requests — 32 MiB memory-binds ~376 concurrent)
+docker pull busybox:1.36
+python3 scripts/load_test.py --tasks 750 --cpu-millicores 30 --memory-mb 16 \
+  --image busybox:1.36 --command sleep --command 55 \
+  --wait-complete --policy bin_pack
+```
+
+Measured resume metrics: [`docs/benchmarks/phase10-resume-metrics.md`](docs/benchmarks/phase10-resume-metrics.md).
 
 ## Incremental phase stacks
 
@@ -192,3 +184,14 @@ make test
 
 Archived evidence for every phase DoD (and the Section 10 resume metrics) lives under
 [`docs/benchmarks/`](docs/benchmarks/).
+
+## Documentation
+
+| Doc | Purpose |
+|---|---|
+| [`docs/local-setup.md`](docs/local-setup.md) | **Run everything locally** (Windows/WSL2 + Linux/macOS) |
+| [`docs/architecture.md`](docs/architecture.md) | Architecture + repository map |
+| [`docs/design-decisions.md`](docs/design-decisions.md) | Per-phase design choices |
+| [`docs/benchmarks/`](docs/benchmarks/) | Measured DoD / resume evidence |
+| [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | Full build plan |
+| [`scripts/README.md`](scripts/README.md) | Load test / chaos / failover tooling |
